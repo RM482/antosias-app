@@ -1,0 +1,121 @@
+:root {
+  --bg: #f6efe3;
+  --fg: #2e2a26;
+  --muted: #8a8074;
+  --accent: #c86b4a;
+  --card-bg: #ffffff;
+  --border: #e4d9c8;
+  --radius: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.spike {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+header h1 {
+  font-size: 1.3rem;
+  margin: 0 0 6px;
+}
+
+header .sub {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 24px;
+  line-height: 1.4;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.card h2 {
+  font-size: 1rem;
+  margin: 0 0 10px;
+}
+
+.hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+button,
+.btn {
+  appearance: none;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 12px 18px;
+  border-radius: 999px;
+  min-height: 44px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+button:disabled {
+  background: #d8cfc2;
+  color: #a89d8d;
+  cursor: not-allowed;
+}
+
+button:active,
+.btn:active {
+  transform: scale(0.97);
+}
+
+#photo-preview {
+  display: block;
+  max-width: 100%;
+  border-radius: 10px;
+  margin: 10px 0;
+}
+
+#log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #fbf7f0;
+  border-radius: 8px;
+  padding: 10px;
+  margin: 0;
+}
+
+p {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  margin: 6px 0;
+}

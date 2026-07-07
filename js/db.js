@@ -1,0 +1,148 @@
+const DB_NAME = 'antosia-app';
+const DB_VERSION = 1;
+
+let dbPromise = null;
+
+function openDB() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('meta')) {
+        db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('categories')) {
+        const store = db.createObjectStore('categories', { keyPath: 'id' });
+        store.createIndex('order', 'order');
+      }
+      if (!db.objectStoreNames.contains('words')) {
+        const store = db.createObjectStore('words', { keyPath: 'id' });
+        store.createIndex('categoryId', 'categoryId');
+        store.createIndex('lastPracticed', 'lastPracticed');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+function reqToPromise(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export function newId() {
+  return (crypto.randomUUID && crypto.randomUUID())
+    || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export async function getAll(storeName) {
+  const db = await openDB();
+  return reqToPromise(db.transaction(storeName).objectStore(storeName).getAll());
+}
+
+export async function get(storeName, id) {
+  const db = await openDB();
+  return reqToPromise(db.transaction(storeName).objectStore(storeName).get(id));
+}
+
+export async function put(storeName, value) {
+  const db = await openDB();
+  const t = db.transaction(storeName, 'readwrite');
+  t.objectStore(storeName).put(value);
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve(value);
+    t.onerror = () => reject(t.error);
+  });
+}
+
+export async function remove(storeName, id) {
+  const db = await openDB();
+  const t = db.transaction(storeName, 'readwrite');
+  t.objectStore(storeName).delete(id);
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+  });
+}
+
+export function wordLabel(word) {
+  return [word.article, word.word].filter(Boolean).join(' ');
+}
+
+export function isSessionEligible(word) {
+  return !!word.audioWord;
+}
+
+// navigator.storage.persist() only *requests* persistence — it's a heuristic,
+// not a guarantee, so callers should surface `persisted` to the parent rather
+// than assume it succeeded.
+export async function requestPersistentStorage() {
+  if (!navigator.storage || !navigator.storage.persist) {
+    return { supported: false, persisted: false, estimate: null };
+  }
+  const alreadyPersisted = await navigator.storage.persisted();
+  const persisted = alreadyPersisted || await navigator.storage.persist();
+  const estimate = navigator.storage.estimate ? await navigator.storage.estimate() : null;
+  return { supported: true, persisted, estimate };
+}
+
+const SEED_CATEGORIES = [
+  { id: 'cat-breakfast', name: 'Breakfast', emoji: '🍳', order: 0 },
+  { id: 'cat-clothes', name: 'Clothes', emoji: '👕', order: 1 },
+  { id: 'cat-toys', name: 'Toys / play', emoji: '🧸', order: 2 },
+];
+
+const SEED_WORDS = [
+  { categoryId: 'cat-breakfast', article: 'de', word: 'banaan', placeholderEmoji: '🍌' },
+  { categoryId: 'cat-breakfast', article: 'de', word: 'melk', placeholderEmoji: '🥛' },
+  { categoryId: 'cat-breakfast', article: 'het', word: 'brood', placeholderEmoji: '🍞' },
+  { categoryId: 'cat-breakfast', article: 'de', word: 'lepel', placeholderEmoji: '🥄' },
+  { categoryId: 'cat-breakfast', article: 'de', word: 'beker', placeholderEmoji: '🥤' },
+  { categoryId: 'cat-clothes', article: 'de', word: 'sok', placeholderEmoji: '🧦' },
+  { categoryId: 'cat-clothes', article: 'de', word: 'schoen', placeholderEmoji: '👟' },
+  { categoryId: 'cat-clothes', article: 'de', word: 'jas', placeholderEmoji: '🧥' },
+  { categoryId: 'cat-clothes', article: 'de', word: 'broek', placeholderEmoji: '👖' },
+  { categoryId: 'cat-toys', article: 'de', word: 'bal', placeholderEmoji: '⚽' },
+  { categoryId: 'cat-toys', article: 'de', word: 'beer', placeholderEmoji: '🧸' },
+  { categoryId: 'cat-toys', article: 'het', word: 'boek', placeholderEmoji: '📖' },
+  { categoryId: 'cat-toys', article: 'de', word: 'auto', placeholderEmoji: '🚗' },
+];
+
+export async function ensureSeeded() {
+  const seededFlag = await get('meta', 'seeded');
+  if (seededFlag) return false;
+
+  for (const category of SEED_CATEGORIES) {
+    await put('categories', { ...category, createdAt: Date.now() });
+  }
+  for (const w of SEED_WORDS) {
+    const now = Date.now();
+    await put('words', {
+      id: newId(),
+      categoryId: w.categoryId,
+      language: 'nl',
+      article: w.article,
+      word: w.word,
+      photo: null,
+      placeholderEmoji: w.placeholderEmoji,
+      audioWord: null,
+      audioPhrase: null,
+      phraseText: '',
+      realWorldPrompt: `Find ${w.article} ${w.word}`,
+      understandingStatus: 'not_introduced',
+      speechStatus: 'none',
+      dateIntroduced: null,
+      lastPracticed: null,
+      timesPracticed: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  await put('meta', { key: 'seeded', value: true });
+  return true;
+}
