@@ -15,5 +15,10 @@
   <main id="app" class="app"></main>
   <div id="session" hidden></div>
   <script type="module" src="./js/admin.js?v=6"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js');
+    }
+  </script>
 </body>
 </html>
