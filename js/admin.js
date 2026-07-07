@@ -1,7 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=5';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=5';
-import { startSession, initSession } from './session.js?v=5';
-import { el } from './dom.js?v=5';
+import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=6';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=6';
+import { startSession, initSession } from './session.js?v=6';
+import { el } from './dom.js?v=6';
+import { exportAndShare, importFromGist } from './backup.js?v=6';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -237,6 +238,32 @@ async function renderCategories() {
     }
     screen.appendChild(list);
   }
+
+  screen.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: '📤 Export for sharing',
+      style: 'margin-top:8px;width:100%;',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Preparing export…';
+        try {
+          const { method, sizeMB } = await exportAndShare();
+          if (method === 'download') {
+            alert(
+              `Exported (~${sizeMB} MB) as "antosias-app-export.json". Check your Downloads or Files app — send that file to whoever is publishing the shared link.`
+            );
+          }
+        } catch (err) {
+          alert(`Export failed: ${err.message}`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '📤 Export for sharing';
+        }
+      },
+    })
+  );
 
   appEl.appendChild(screen);
 }
@@ -606,7 +633,21 @@ initSession(() => {
 });
 
 (async () => {
-  await ensureSeeded();
+  const sharedGistId = new URLSearchParams(location.search).get('shared');
+  const alreadySeeded = await get('meta', 'seeded');
+
+  if (!alreadySeeded && sharedGistId) {
+    try {
+      await importFromGist(sharedGistId);
+      await put('meta', { key: 'seeded', value: true });
+    } catch (err) {
+      alert(`Could not load the shared words (${err.message}). Showing the example words instead.`);
+      await ensureSeeded();
+    }
+  } else {
+    await ensureSeeded();
+  }
+
   requestPersistentStorage();
   render();
 })();

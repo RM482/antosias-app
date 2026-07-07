@@ -1,6 +1,6 @@
-import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=5';
-import { playBlobSequence, unlockAudio } from './media.js?v=5';
-import { el, shuffle } from './dom.js?v=5';
+import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=6';
+import { playBlobSequence, unlockAudio } from './media.js?v=6';
+import { el, shuffle } from './dom.js?v=6';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
