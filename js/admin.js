@@ -1,5 +1,7 @@
 import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js';
 import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js';
+import { startSession, initSession } from './session.js';
+import { el } from './dom.js';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -14,23 +16,6 @@ function pop() {
 }
 function current() {
   return stack[stack.length - 1];
-}
-
-// --- Tiny DOM builder -----------------------------------------------------
-
-function el(tag, attrs = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') node.className = v;
-    else if (k === 'text') node.textContent = v;
-    else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
-    else if (v !== undefined && v !== null) node.setAttribute(k, v);
-  }
-  for (const child of [].concat(children)) {
-    if (child == null) continue;
-    node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
-  }
-  return node;
 }
 
 function topbar({ title, onBack, onAdd }) {
@@ -215,22 +200,38 @@ async function renderCategories() {
     for (const cat of categories) {
       const catWords = words.filter((w) => w.categoryId === cat.id);
       const readyCount = catWords.filter(isSessionEligible).length;
+      const canStart = readyCount >= 2;
+
+      const startBtn = el('button', {
+        type: 'button',
+        class: 'icon-btn session-start-btn',
+        text: '▶ Start',
+        onclick: () => startSession(cat.id),
+      });
+      startBtn.disabled = !canStart;
+      startBtn.title = canStart
+        ? `Start a session for ${cat.name}`
+        : 'Needs at least 2 words with recorded audio';
+
       list.appendChild(
         el('li', {}, [
-          el(
-            'button',
-            { class: 'list-item', onclick: () => push({ screen: 'words', categoryId: cat.id }) },
-            [
-              el('div', { class: 'thumb', text: cat.emoji || '📁' }),
-              el('div', { class: 'list-item-body' }, [
-                el('div', { class: 'list-item-title', text: cat.name }),
-                el('div', {
-                  class: 'list-item-sub',
-                  text: `${catWords.length} word${catWords.length === 1 ? '' : 's'} · ${readyCount} ready for sessions`,
-                }),
-              ]),
-            ]
-          ),
+          el('div', { class: 'list-item-row' }, [
+            el(
+              'button',
+              { class: 'list-item', onclick: () => push({ screen: 'words', categoryId: cat.id }) },
+              [
+                el('div', { class: 'thumb', text: cat.emoji || '📁' }),
+                el('div', { class: 'list-item-body' }, [
+                  el('div', { class: 'list-item-title', text: cat.name }),
+                  el('div', {
+                    class: 'list-item-sub',
+                    text: `${catWords.length} word${catWords.length === 1 ? '' : 's'} · ${readyCount} ready for sessions`,
+                  }),
+                ]),
+              ]
+            ),
+            startBtn,
+          ]),
         ])
       );
     }
@@ -343,6 +344,26 @@ async function renderWords({ categoryId }) {
   );
 
   const screen = el('div', { class: 'screen' });
+
+  const readyCount = words.filter(isSessionEligible).length;
+  const canStart = readyCount >= 2;
+  const startBtn = el('button', {
+    text: '▶ Start a session',
+    style: 'margin-bottom:10px;width:100%;',
+    onclick: () => startSession(categoryId),
+  });
+  startBtn.disabled = !canStart;
+  screen.appendChild(startBtn);
+  if (!canStart) {
+    screen.appendChild(
+      el('p', {
+        class: 'hint',
+        text: 'Needs at least 2 words with recorded audio before a session can start.',
+        style: 'margin:-4px 0 14px;',
+      })
+    );
+  }
+
   screen.appendChild(
     el('button', {
       class: 'btn-secondary',
@@ -577,6 +598,12 @@ async function render() {
   if (view.screen === 'words') return renderWords(view);
   if (view.screen === 'wordEdit') return renderWordEdit(view);
 }
+
+initSession(() => {
+  stack.length = 0;
+  stack.push({ screen: 'categories' });
+  render();
+});
 
 (async () => {
   await ensureSeeded();

@@ -125,3 +125,34 @@ export function playBlob(blob) {
   audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
   return audio.play();
 }
+
+// Plays blobs one after another on the shared element (e.g. word audio then
+// phrase audio). Falsy entries are skipped. Resolves once the last one ends.
+export function playBlobSequence(blobs) {
+  const queue = blobs.filter(Boolean);
+  if (queue.length === 0) return Promise.resolve();
+  const audio = getSharedAudioElement();
+
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    function playNext() {
+      if (i >= queue.length) {
+        resolve();
+        return;
+      }
+      const url = URL.createObjectURL(queue[i++]);
+      const onEnded = () => {
+        URL.revokeObjectURL(url);
+        audio.removeEventListener('ended', onEnded);
+        playNext();
+      };
+      audio.addEventListener('ended', onEnded, { once: true });
+      audio.src = url;
+      audio.play().catch((err) => {
+        audio.removeEventListener('ended', onEnded);
+        reject(err);
+      });
+    }
+    playNext();
+  });
+}
