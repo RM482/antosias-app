@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=7';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=7';
-import { startSession, initSession } from './session.js?v=7';
-import { el } from './dom.js?v=7';
-import { exportAndShare, importFromGist } from './backup.js?v=7';
+import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=8';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=8';
+import { startSession, initSession } from './session.js?v=8';
+import { el } from './dom.js?v=8';
+import { exportAndShare, importFromGist } from './backup.js?v=8';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -632,22 +632,34 @@ initSession(() => {
   render();
 });
 
-(async () => {
-  const sharedGistId = new URLSearchParams(location.search).get('shared');
-  const alreadySeeded = await get('meta', 'seeded');
+function showStartupMessage(text) {
+  appEl.innerHTML = '';
+  appEl.appendChild(el('p', { class: 'empty-state', text }));
+}
 
-  if (!alreadySeeded && sharedGistId) {
-    try {
-      await importFromGist(sharedGistId);
-      await put('meta', { key: 'seeded', value: true });
-    } catch (err) {
-      alert(`Could not load the shared words (${err.message}). Showing the example words instead.`);
+(async () => {
+  try {
+    const sharedGistId = new URLSearchParams(location.search).get('shared');
+    const alreadySeeded = await get('meta', 'seeded');
+
+    if (!alreadySeeded && sharedGistId) {
+      showStartupMessage('Loading shared words… this can take a little while on first open.');
+      try {
+        await importFromGist(sharedGistId);
+        await put('meta', { key: 'seeded', value: true });
+      } catch (err) {
+        alert(`Could not load the shared words (${err.message}). Showing the example words instead.`);
+        await ensureSeeded();
+      }
+    } else {
       await ensureSeeded();
     }
-  } else {
-    await ensureSeeded();
-  }
 
-  requestPersistentStorage();
-  render();
+    requestPersistentStorage();
+    render();
+  } catch (err) {
+    // Surface startup failures (e.g. storage unavailable in some private
+    // browsing modes) as visible text instead of a silent blank page.
+    showStartupMessage(`Something went wrong while starting the app: ${err.message}`);
+  }
 })();
