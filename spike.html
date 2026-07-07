@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Antosia's app — Spike Test</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="theme-color" content="#f6efe3" />
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <main class="spike">
+    <header>
+      <h1>Antosia's app — Stage 1 spike test</h1>
+      <p class="sub">
+        Throwaway test harness. Proves photo capture, audio recording, IndexedDB
+        persistence, and Home Screen install all work on this iPhone before the
+        real app is built on top of these primitives.
+      </p>
+    </header>
+
+    <section class="card" id="install-section">
+      <h2>1. Install / standalone mode</h2>
+      <p id="install-status">Checking…</p>
+      <p class="hint">
+        Share button → "Add to Home Screen", then reopen from your Home Screen
+        (not Safari) and reload this page to confirm standalone mode.
+      </p>
+    </section>
+
+    <section class="card" id="storage-section">
+      <h2>2. Persistent storage</h2>
+      <button id="check-storage-btn">Check storage</button>
+      <p id="storage-status">Not checked yet.</p>
+    </section>
+
+    <section class="card" id="photo-section">
+      <h2>3. Photo capture</h2>
+      <div class="btn-row">
+        <label class="btn">
+          Take Photo
+          <input type="file" accept="image/*" capture="environment" id="take-photo-input" hidden />
+        </label>
+        <label class="btn">
+          Choose Photo
+          <input type="file" accept="image/*" id="choose-photo-input" hidden />
+        </label>
+      </div>
+      <img id="photo-preview" alt="" hidden />
+      <p id="photo-status">No photo yet.</p>
+    </section>
+
+    <section class="card" id="audio-section">
+      <h2>4. Audio recording</h2>
+      <div class="btn-row">
+        <button id="record-word-btn">Record word (max 6s)</button>
+        <button id="play-word-btn" disabled>Play back</button>
+      </div>
+      <p id="audio-status">No recording yet.</p>
+    </section>
+
+    <section class="card" id="db-section">
+      <h2>5. IndexedDB persistence</h2>
+      <div class="btn-row">
+        <button id="save-test-word-btn" disabled>Save photo + audio to IndexedDB</button>
+        <button id="clear-test-word-btn">Clear saved test word</button>
+      </div>
+      <p id="db-status">Checking for a previously saved test word…</p>
+      <p class="hint">
+        Tap Save, then fully force-quit the app (swipe it away in the App
+        Switcher) and reopen from the Home Screen — this section should still
+        report the saved word.
+      </p>
+    </section>
+
+    <section class="card" id="log-section">
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script type="module" src="./js/spike.js"></script>
+</body>
+</html>
