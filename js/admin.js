@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=8';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=8';
-import { startSession, initSession } from './session.js?v=8';
-import { el } from './dom.js?v=8';
-import { exportAndShare, importFromGist } from './backup.js?v=8';
+import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=9';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=9';
+import { startSession, initSession } from './session.js?v=9';
+import { el } from './dom.js?v=9';
+import { exportAndShare, importFromGist } from './backup.js?v=9';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -637,6 +637,10 @@ function showStartupMessage(text) {
   appEl.appendChild(el('p', { class: 'empty-state', text }));
 }
 
+function errText(err) {
+  return (err && err.message) || String(err);
+}
+
 (async () => {
   try {
     const sharedGistId = new URLSearchParams(location.search).get('shared');
@@ -648,7 +652,7 @@ function showStartupMessage(text) {
         await importFromGist(sharedGistId);
         await put('meta', { key: 'seeded', value: true });
       } catch (err) {
-        alert(`Could not load the shared words (${err.message}). Showing the example words instead.`);
+        alert(`Could not load the shared words (${errText(err)}). Showing the example words instead.`);
         await ensureSeeded();
       }
     } else {
@@ -660,6 +664,6 @@ function showStartupMessage(text) {
   } catch (err) {
     // Surface startup failures (e.g. storage unavailable in some private
     // browsing modes) as visible text instead of a silent blank page.
-    showStartupMessage(`Something went wrong while starting the app: ${err.message}`);
+    showStartupMessage(`Something went wrong while starting the app: ${errText(err)}`);
   }
 })();

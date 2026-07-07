@@ -3,6 +3,14 @@ const DB_VERSION = 1;
 
 let dbPromise = null;
 
+// IndexedDB failure objects (req.error / transaction.error) can be null in
+// some situations — e.g. aborted transactions, or storage restrictions in
+// private browsing — so always substitute a real Error with a readable
+// message rather than rejecting with null.
+function storageError(rawError, context) {
+  return rawError || new Error(`Storage failed during "${context}" — the browser may be blocking or limiting storage (this can happen in private browsing).`);
+}
+
 function openDB() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
@@ -23,7 +31,7 @@ function openDB() {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(storageError(req.error, 'opening the database'));
   });
   return dbPromise;
 }
@@ -31,7 +39,7 @@ function openDB() {
 function reqToPromise(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(storageError(req.error, 'reading data'));
   });
 }
 
@@ -56,7 +64,8 @@ export async function put(storeName, value) {
   t.objectStore(storeName).put(value);
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve(value);
-    t.onerror = () => reject(t.error);
+    t.onerror = () => reject(storageError(t.error, 'saving data'));
+    t.onabort = () => reject(storageError(t.error, 'saving data (transaction aborted, possibly out of storage space)'));
   });
 }
 
@@ -66,7 +75,8 @@ export async function remove(storeName, id) {
   t.objectStore(storeName).delete(id);
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve();
-    t.onerror = () => reject(t.error);
+    t.onerror = () => reject(storageError(t.error, 'deleting data'));
+    t.onabort = () => reject(storageError(t.error, 'deleting data (transaction aborted)'));
   });
 }
 

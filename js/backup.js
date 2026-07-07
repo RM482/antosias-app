@@ -1,4 +1,4 @@
-import { getAll, put } from './db.js?v=8';
+import { getAll, put } from './db.js?v=9';
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
