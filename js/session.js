@@ -1,6 +1,6 @@
-import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=3';
-import { playBlobSequence, unlockAudio } from './media.js?v=3';
-import { el, shuffle } from './dom.js?v=3';
+import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=4';
+import { playBlobSequence, unlockAudio } from './media.js?v=4';
+import { el, shuffle } from './dom.js?v=4';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -78,11 +78,23 @@ function exitSession() {
 
 function mountParentGate() {
   const gate = el('button', { type: 'button', class: 'parent-gate', 'aria-label': 'Hold to exit to parent area' });
+  const dot = el('div', { class: 'parent-gate-dot' });
   const fill = el('div', { class: 'parent-gate-fill' });
-  gate.appendChild(fill);
+  dot.appendChild(fill);
+  gate.appendChild(dot);
 
   let timer = null;
-  const start = () => {
+  const start = (e) => {
+    // Pointer capture keeps pointerup routed to this button even if the
+    // finger drifts slightly during the hold — small movement shouldn't
+    // cancel a 3-second hold on a small touch target.
+    if (gate.setPointerCapture) {
+      try {
+        gate.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore — capture is a nice-to-have, not required for correctness
+      }
+    }
     fill.classList.add('filling');
     timer = setTimeout(() => {
       fill.classList.remove('filling');
@@ -96,7 +108,6 @@ function mountParentGate() {
 
   gate.addEventListener('pointerdown', start);
   gate.addEventListener('pointerup', cancel);
-  gate.addEventListener('pointerleave', cancel);
   gate.addEventListener('pointercancel', cancel);
 
   sessionEl.appendChild(gate);
