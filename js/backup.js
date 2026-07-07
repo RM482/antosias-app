@@ -1,4 +1,4 @@
-import { getAll, put } from './db.js?v=6';
+import { getAll, put } from './db.js?v=7';
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -83,7 +83,17 @@ export async function importFromGist(gistId) {
   if (!res.ok) throw new Error(`Could not load shared data (status ${res.status})`);
   const gist = await res.json();
   const file = Object.values(gist.files || {})[0];
-  if (!file || !file.content) throw new Error('Shared data file not found in that link');
-  const payload = JSON.parse(file.content);
+  if (!file) throw new Error('Shared data file not found in that link');
+
+  // The gists API truncates file content over ~1MB; real exports (with
+  // photos/audio inlined) easily exceed that, so fetch the raw file instead.
+  let text = file.content;
+  if (file.truncated || !text) {
+    const rawRes = await fetch(file.raw_url);
+    if (!rawRes.ok) throw new Error(`Could not load shared data file (status ${rawRes.status})`);
+    text = await rawRes.text();
+  }
+
+  const payload = JSON.parse(text);
   await importPayload(payload);
 }
