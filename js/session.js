@@ -1,6 +1,6 @@
-import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=4';
-import { playBlobSequence, unlockAudio } from './media.js?v=4';
-import { el, shuffle } from './dom.js?v=4';
+import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=5';
+import { playBlobSequence, unlockAudio } from './media.js?v=5';
+import { el, shuffle } from './dom.js?v=5';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -83,18 +83,13 @@ function mountParentGate() {
   dot.appendChild(fill);
   gate.appendChild(dot);
 
+  // Plain touch events (not Pointer Events, which have had capture/leave
+  // quirks on iOS Safari). We deliberately don't listen for touchmove, so
+  // finger drift during the hold has no effect — only an actual lift
+  // (touchend) or an OS-level gesture takeover (touchcancel) cancels it.
   let timer = null;
   const start = (e) => {
-    // Pointer capture keeps pointerup routed to this button even if the
-    // finger drifts slightly during the hold — small movement shouldn't
-    // cancel a 3-second hold on a small touch target.
-    if (gate.setPointerCapture) {
-      try {
-        gate.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore — capture is a nice-to-have, not required for correctness
-      }
-    }
+    if (e.cancelable) e.preventDefault();
     fill.classList.add('filling');
     timer = setTimeout(() => {
       fill.classList.remove('filling');
@@ -106,9 +101,13 @@ function mountParentGate() {
     fill.classList.remove('filling');
   };
 
-  gate.addEventListener('pointerdown', start);
-  gate.addEventListener('pointerup', cancel);
-  gate.addEventListener('pointercancel', cancel);
+  gate.addEventListener('touchstart', start, { passive: false });
+  gate.addEventListener('touchend', cancel);
+  gate.addEventListener('touchcancel', cancel);
+  // Mouse fallback so this is still testable in a desktop browser.
+  gate.addEventListener('mousedown', start);
+  gate.addEventListener('mouseup', cancel);
+  gate.addEventListener('mouseleave', cancel);
 
   sessionEl.appendChild(gate);
 }

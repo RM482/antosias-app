@@ -573,8 +573,8 @@ p {
    dot inside stays small and subtle so it doesn't distract a toddler. */
 .parent-gate {
   position: fixed;
-  bottom: 4px;
-  right: 4px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
   width: 72px;
   height: 72px;
   border-radius: 50%;
