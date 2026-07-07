@@ -1,5 +1,24 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
+## Status (as of 7 July 2026)
+
+**Stages 1–3 are built, deployed, and verified working on the real iPhone.** Stage 4 (polish) is deliberately parked while the app gets real-world use first.
+
+- **Live app:** https://rm482.github.io/antosias-app/ — dedicated public repo `RM482/antosias-app`, deployed via GitHub Pages (push to `main` = deploy). Installed on the parent's iPhone via Add to Home Screen.
+- **Stage 1 (spike):** camera capture, mic recording, IndexedDB Blob persistence, and standalone install all confirmed on-device. Harness kept at `spike.html` for future iOS debugging.
+- **Stage 2 (parent admin):** category/word CRUD, photo take/choose, word + phrase audio recording with playback, separate understanding/speech status pickers, "Needs audio" flags — verified end-to-end on iPhone; in real use (user has recorded 6 words with photos/audio, renamed banaan → mandarijn).
+- **Stage 3 (child session mode):** listen stage → 2-choice tap-the-picture game → real-world prompt card → end screen with per-word Understood/Said-it observations, press-and-hold parent exit gate — verified end-to-end on iPhone.
+- **Sharing (added beyond the original plan):** "Export for sharing" button packages everything (photos/audio inlined) to a JSON file via the iOS share sheet. That file gets published as a *secret GitHub Gist*, and `?shared=<gistId>` on the app URL auto-imports it on a device's first open — no import step for recipients. Confirmed working on a second iPhone. It's a snapshot, not live sync; unlisted, not private (anyone with the exact link can view). First published share: gist `f5e49af98a0ac660274b9f9c97111364`.
+
+**Hard-won iOS lessons now baked into the code:**
+- iOS Home Screen web apps have storage *separate from Safari's* (and from any desktop browser) — all real testing must happen in the installed app itself.
+- GitHub Pages' 10-minute HTTP cache made deployed updates invisible on the phone; fixed permanently with a network-first service worker (`sw.js`) plus `?v=N` cache-busting on internal imports (bump N on each change).
+- The parent gate needed plain touch events + a 72px target + safe-area clearance; Pointer Events and edge-hugging placement both failed on iOS.
+- The Gists API truncates files >1MB — shared imports must fetch `raw_url` when `truncated` is set.
+- IndexedDB can reject with `null` errors (notably under private-browsing storage caps) — DB layer substitutes descriptive Errors; Safari private windows can't hold a ~2MB import, so they're a bad test vehicle for sharing.
+
+**Not yet done (Stage 4, parked):** spaced-repetition resurfacing, offline cache polish, Guided Access instructions card, routine backup workflow, storage persistence/quota surfacing in the UI.
+
 ## Context
 
 Build the first testable prototype of an iPhone-friendly app that helps a ~2-year-old learn Dutch words through short (3–5 min) parent-led sessions: real family photos, parent-recorded audio, a tiny tap interaction, and a real-world prompt that pushes the practice off-screen. The goal is to prove the loop *parent adds photo/audio → child sees photo → hears Dutch word → taps correct item → real-world prompt → parent tracks understanding/speech* — not to build a platform. Dutch only; Polish, profiles, cloud sync etc. are explicitly deferred.
