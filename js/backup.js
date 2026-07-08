@@ -1,4 +1,4 @@
-import { getAll, putAllTransactional } from './db.js?v=11';
+import { getAll, putAllTransactional } from './db.js?v=12';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
@@ -86,7 +86,10 @@ export async function exportAndShare({ warnLargeShare = false } = {}) {
   return { method: 'download', sizeMB };
 }
 
-function validatePayload(payload) {
+// Whole-file integrity: if these fail the file isn't a usable export at all,
+// so we refuse rather than guess. (Individual malformed records are handled
+// separately below — one stray record must never sink an entire restore.)
+function assertStructurallyValid(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('This file does not look like an export from this app.');
   }
@@ -98,25 +101,29 @@ function validatePayload(payload) {
   if (!Array.isArray(payload.categories) || !Array.isArray(payload.words)) {
     throw new Error('This export file is incomplete or damaged (missing categories or words).');
   }
-  for (const cat of payload.categories) {
-    if (!cat || typeof cat.id !== 'string' || typeof cat.name !== 'string') {
-      throw new Error('This export file is damaged (a category is missing its id or name).');
-    }
-  }
-  for (const w of payload.words) {
-    if (!w || typeof w.id !== 'string' || typeof w.word !== 'string' || typeof w.categoryId !== 'string') {
-      throw new Error('This export file is damaged (a word entry is missing required fields).');
-    }
-  }
 }
 
-// Existing records with the same id are overwritten; everything else is
-// left alone (merge-by-id).
+const isUsableCategory = (c) => c && typeof c.id === 'string' && typeof c.name === 'string';
+// A word needs an id, a word text, and a real category to belong to. Records
+// with a null/empty categoryId (e.g. leftover test entries) can never be
+// shown in the app, so they're dropped rather than carried forward.
+const isUsableWord = (w) =>
+  w && typeof w.id === 'string' && typeof w.word === 'string' && typeof w.categoryId === 'string' && w.categoryId !== '';
+
+// Existing records with the same id are overwritten; everything else is left
+// alone (merge-by-id). Unusable individual records are skipped and counted;
+// all usable records are written together in one all-or-nothing transaction.
+// Returns a summary so callers can tell the user what happened.
 export async function importPayload(payload) {
-  validatePayload(payload);
+  assertStructurallyValid(payload);
+
+  const categories = payload.categories.filter(isUsableCategory);
+  const usableWords = payload.words.filter(isUsableWord);
+  const skipped =
+    (payload.categories.length - categories.length) + (payload.words.length - usableWords.length);
 
   const words = await Promise.all(
-    payload.words.map(async (w) => ({
+    usableWords.map(async (w) => ({
       ...w,
       photo: w.photo ? await dataUrlToBlob(w.photo) : null,
       audioWord: w.audioWord ? await dataUrlToBlob(w.audioWord) : null,
@@ -124,7 +131,8 @@ export async function importPayload(payload) {
     }))
   );
 
-  await putAllTransactional({ categories: payload.categories, words });
+  await putAllTransactional({ categories, words });
+  return { categories: categories.length, words: words.length, skipped };
 }
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public
