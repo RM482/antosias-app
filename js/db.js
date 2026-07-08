@@ -246,6 +246,15 @@ export function guessUsesEen(word) {
   return w ? !DUTCH_MASS_NOUNS.has(w) : true;
 }
 
+// The effective "een" choice for a word: its saved flag when explicitly set,
+// otherwise the best-effort guess. This is the single source of truth so the
+// game and the word editor always agree — including for older words saved
+// before the flag existed (their flag is blank, so both fall back to the
+// guess rather than defaulting inconsistently).
+export function usesEen(word) {
+  return typeof word.useEen === 'boolean' ? word.useEen : guessUsesEen(word.word);
+}
+
 // Seed content, keyed by language. Category ids are language-prefixed so a
 // future second language can't collide with Dutch. Polish is intentionally
 // empty for now — the plumbing is ready, the content lands in a later stage.

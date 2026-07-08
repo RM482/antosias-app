@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=20';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=20';
-import { startSession, initSession } from './session.js?v=20';
-import { el } from './dom.js?v=20';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=20';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=21';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=21';
+import { startSession, initSession } from './session.js?v=21';
+import { el } from './dom.js?v=21';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=21';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -605,7 +605,7 @@ async function renderWordEdit({ categoryId, wordId }) {
   // word that already had an explicit choice saved is left as-is.
   const eenExplicit = existing && typeof existing.useEen === 'boolean';
   let eenTouched = !!eenExplicit;
-  draft.useEen = eenExplicit ? existing.useEen : guessUsesEen(draft.word);
+  draft.useEen = usesEen(draft); // explicit saved value, else the guess (same as the game)
   const eenSeg = buildSegmented(screen, {
     label: 'Naming it (“dit is …”)',
     options: [

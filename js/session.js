@@ -6,11 +6,12 @@ import {
   isDue,
   wordLabel,
   getStandardPhrases,
+  usesEen,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=20';
-import { playBlobSequence, unlockAudio } from './media.js?v=20';
-import { el, shuffle, onTap } from './dom.js?v=20';
+} from './db.js?v=21';
+import { playBlobSequence, unlockAudio } from './media.js?v=21';
+import { el, shuffle, onTap } from './dom.js?v=21';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -257,7 +258,7 @@ function renderGameStage(state) {
   // the plain one ("Nee, dit is brood"). useEen defaults on, so only mass
   // nouns need turning off. Speaks only if the matching clip was recorded.
   function sayCorrection(wrongWord) {
-    const carrier = wrongWord.useEen === false ? phrases?.correction : phrases?.correctionEen;
+    const carrier = usesEen(wrongWord) ? phrases?.correctionEen : phrases?.correction;
     if (!carrier) return;
     unlockAudio();
     playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});
