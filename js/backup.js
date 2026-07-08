@@ -1,4 +1,13 @@
-import { getAll, put } from './db.js?v=10';
+import { getAll, putAllTransactional } from './db.js?v=11';
+
+// Import order is strict: (1) validate the whole file, (2) decode every
+// photo/audio back into Blobs, (3) only then write — in a single
+// all-or-nothing transaction. Nothing touches the database until steps
+// 1 and 2 have fully succeeded, so a bad or oversized file can never
+// leave it half-imported. (Step order also matters technically: an
+// IndexedDB transaction auto-commits the moment you await anything
+// non-IndexedDB, so all decoding must finish before the write begins.)
+const SUPPORTED_FORMAT_VERSIONS = [1];
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -32,12 +41,27 @@ export async function buildExportPayload() {
   };
 }
 
+// Above this size, the Gist-based sharing flow becomes unreliable (GitHub
+// stops serving big gist files the simple way well before 10 MB, and
+// base64 already inflated the media by ~a third). Backups are never
+// blocked by size — this only gates the sharing path.
+const SHARE_SIZE_WARN_MB = 8;
+
 // Tries the native share sheet first (lets you AirDrop/Message/email the
 // file directly on iOS); falls back to a plain download if unsupported.
-export async function exportAndShare() {
+// Pass { warnLargeShare: true } when the file is destined for the shared
+//-link flow, so oversized exports get flagged before leaving the phone.
+export async function exportAndShare({ warnLargeShare = false } = {}) {
   const payload = await buildExportPayload();
   const json = JSON.stringify(payload);
   const sizeMB = (json.length / 1024 / 1024).toFixed(1);
+
+  if (warnLargeShare && Number(sizeMB) > SHARE_SIZE_WARN_MB) {
+    const proceed = confirm(
+      `This export is large (~${sizeMB} MB). Shared links may fail above ${SHARE_SIZE_WARN_MB} MB. You can still save it as a backup, but sharing might not work. Continue anyway?`
+    );
+    if (!proceed) return { method: 'cancelled', sizeMB };
+  }
   const blob = new Blob([json], { type: 'application/json' });
   const file = new File([blob], 'antosias-app-export.json', { type: 'application/json' });
 
@@ -62,18 +86,45 @@ export async function exportAndShare() {
   return { method: 'download', sizeMB };
 }
 
-export async function importPayload(payload) {
-  for (const cat of payload.categories || []) {
-    await put('categories', cat);
+function validatePayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('This file does not look like an export from this app.');
   }
-  for (const w of payload.words || []) {
-    await put('words', {
+  if (!SUPPORTED_FORMAT_VERSIONS.includes(payload.formatVersion)) {
+    throw new Error(
+      'This backup was made by a newer version of the app than the one running now. Update the app first, then import again.'
+    );
+  }
+  if (!Array.isArray(payload.categories) || !Array.isArray(payload.words)) {
+    throw new Error('This export file is incomplete or damaged (missing categories or words).');
+  }
+  for (const cat of payload.categories) {
+    if (!cat || typeof cat.id !== 'string' || typeof cat.name !== 'string') {
+      throw new Error('This export file is damaged (a category is missing its id or name).');
+    }
+  }
+  for (const w of payload.words) {
+    if (!w || typeof w.id !== 'string' || typeof w.word !== 'string' || typeof w.categoryId !== 'string') {
+      throw new Error('This export file is damaged (a word entry is missing required fields).');
+    }
+  }
+}
+
+// Existing records with the same id are overwritten; everything else is
+// left alone (merge-by-id).
+export async function importPayload(payload) {
+  validatePayload(payload);
+
+  const words = await Promise.all(
+    payload.words.map(async (w) => ({
       ...w,
       photo: w.photo ? await dataUrlToBlob(w.photo) : null,
       audioWord: w.audioWord ? await dataUrlToBlob(w.audioWord) : null,
       audioPhrase: w.audioPhrase ? await dataUrlToBlob(w.audioPhrase) : null,
-    });
-  }
+    }))
+  );
+
+  await putAllTransactional({ categories: payload.categories, words });
 }
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public

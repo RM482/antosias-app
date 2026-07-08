@@ -80,6 +80,25 @@ export async function remove(storeName, id) {
   });
 }
 
+// Writes many records across stores in ONE transaction: either every record
+// commits or none do. Used by backup restore so a failure partway through
+// (bad file, out of storage) can never leave a half-imported database.
+// `writes` looks like: { categories: [...], words: [...] }
+export async function putAllTransactional(writes) {
+  const db = await openDB();
+  const storeNames = Object.keys(writes);
+  const t = db.transaction(storeNames, 'readwrite');
+  for (const storeName of storeNames) {
+    const store = t.objectStore(storeName);
+    for (const record of writes[storeName]) store.put(record);
+  }
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(storageError(t.error, 'restoring data'));
+    t.onabort = () => reject(storageError(t.error, 'restoring data (transaction aborted, possibly out of storage space)'));
+  });
+}
+
 export function wordLabel(word) {
   return [word.article, word.word].filter(Boolean).join(' ');
 }

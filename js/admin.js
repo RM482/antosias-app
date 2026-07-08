@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=10';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=10';
-import { startSession, initSession } from './session.js?v=10';
-import { el } from './dom.js?v=10';
-import { exportAndShare, importFromGist } from './backup.js?v=10';
+import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=11';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=11';
+import { startSession, initSession } from './session.js?v=11';
+import { el } from './dom.js?v=11';
+import { exportAndShare, importFromGist } from './backup.js?v=11';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -239,29 +239,54 @@ async function renderCategories() {
     screen.appendChild(list);
   }
 
-  screen.appendChild(
-    el('button', {
+  // Both buttons produce the same export file; they differ in intent and
+  // messaging. Backup = safety copy for yourself, never size-gated.
+  // Share = destined for a public-if-you-have-the-link Gist, so it gets a
+  // privacy warning and a size check first.
+  function exportButton({ label, busyLabel, options, beforeExport, doneMessage }) {
+    return el('button', {
       class: 'btn-secondary',
-      text: '📤 Export for sharing',
+      text: label,
       style: 'margin-top:8px;width:100%;',
       onclick: async (e) => {
+        if (beforeExport && !beforeExport()) return;
         const btn = e.currentTarget;
         btn.disabled = true;
-        btn.textContent = 'Preparing export…';
+        btn.textContent = busyLabel;
         try {
-          const { method, sizeMB } = await exportAndShare();
-          if (method === 'download') {
-            alert(
-              `Exported (~${sizeMB} MB) as "antosias-app-export.json". Check your Downloads or Files app — send that file to whoever is publishing the shared link.`
-            );
-          }
+          const { method, sizeMB } = await exportAndShare(options);
+          if (method === 'download') alert(doneMessage(sizeMB));
         } catch (err) {
           alert(`Export failed: ${err.message}`);
         } finally {
           btn.disabled = false;
-          btn.textContent = '📤 Export for sharing';
+          btn.textContent = label;
         }
       },
+    });
+  }
+
+  screen.appendChild(
+    exportButton({
+      label: '💾 Save backup',
+      busyLabel: 'Preparing backup…',
+      options: {},
+      doneMessage: (sizeMB) =>
+        `Backup saved (~${sizeMB} MB) as "antosias-app-export.json". Keep it somewhere safe — Files, iCloud Drive, or AirDrop it to your computer. It contains everything: words, photos, and recordings.`,
+    })
+  );
+
+  screen.appendChild(
+    exportButton({
+      label: '📤 Share with family',
+      busyLabel: 'Preparing export…',
+      options: { warnLargeShare: true },
+      beforeExport: () =>
+        confirm(
+          'Heads up: a shared link is unlisted but not private — anyone who has the link can see the photos and hear the recordings. Share it only with people you trust. Continue?'
+        ),
+      doneMessage: (sizeMB) =>
+        `Exported (~${sizeMB} MB) as "antosias-app-export.json". Check your Downloads or Files app — send that file to whoever is publishing the shared link.`,
     })
   );
 
