@@ -7,9 +7,9 @@ import {
   wordLabel,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=15';
-import { playBlobSequence, unlockAudio } from './media.js?v=15';
-import { el, shuffle, onTap } from './dom.js?v=15';
+} from './db.js?v=16';
+import { playBlobSequence, unlockAudio } from './media.js?v=16';
+import { el, shuffle, onTap } from './dom.js?v=16';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');

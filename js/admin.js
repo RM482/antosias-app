@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=15';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=15';
-import { startSession, initSession } from './session.js?v=15';
-import { el } from './dom.js?v=15';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=15';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=16';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=16';
+import { startSession, initSession } from './session.js?v=16';
+import { el } from './dom.js?v=16';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=16';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -853,18 +853,21 @@ function errText(err) {
   try {
     const sharedGistId = new URLSearchParams(location.search).get('shared');
     const alreadySeeded = await get('meta', 'seeded');
+    const { language } = await getSettings();
 
     if (!alreadySeeded && sharedGistId) {
       showStartupMessage('Loading shared words… this can take a little while on first open.');
       try {
         await importFromGist(sharedGistId);
+        // Mark initialized so we never dump seed words on top of imported data
+        // (ensureSeeded's legacy backfill also relies on this flag).
         await put('meta', { key: 'seeded', value: true });
       } catch (err) {
         alert(`Could not load the shared words (${errText(err)}). Showing the example words instead.`);
-        await ensureSeeded();
+        await ensureSeeded(language);
       }
     } else {
-      await ensureSeeded();
+      await ensureSeeded(language);
     }
 
     requestPersistentStorage();

@@ -192,41 +192,70 @@ export async function saveSettings(partial) {
   return merged;
 }
 
-const SEED_CATEGORIES = [
-  { id: 'cat-breakfast', name: 'Breakfast', emoji: '🍳', order: 0 },
-  { id: 'cat-clothes', name: 'Clothes', emoji: '👕', order: 1 },
-  { id: 'cat-toys', name: 'Toys / play', emoji: '🧸', order: 2 },
-];
+// Seed content, keyed by language. Category ids are language-prefixed so a
+// future second language can't collide with Dutch. Polish is intentionally
+// empty for now — the plumbing is ready, the content lands in a later stage.
+// (Note: a real Polish set needs its own display rules — Polish has no de/het
+// article system — so it is deliberately NOT a mechanical translation here.)
+const SEED_DATA = {
+  nl: {
+    categories: [
+      { id: 'nl-cat-breakfast', name: 'Breakfast', emoji: '🍳', order: 0 },
+      { id: 'nl-cat-clothes', name: 'Clothes', emoji: '👕', order: 1 },
+      { id: 'nl-cat-toys', name: 'Toys / play', emoji: '🧸', order: 2 },
+    ],
+    words: [
+      { categoryId: 'nl-cat-breakfast', article: 'de', word: 'banaan', placeholderEmoji: '🍌' },
+      { categoryId: 'nl-cat-breakfast', article: 'de', word: 'melk', placeholderEmoji: '🥛' },
+      { categoryId: 'nl-cat-breakfast', article: 'het', word: 'brood', placeholderEmoji: '🍞' },
+      { categoryId: 'nl-cat-breakfast', article: 'de', word: 'lepel', placeholderEmoji: '🥄' },
+      { categoryId: 'nl-cat-breakfast', article: 'de', word: 'beker', placeholderEmoji: '🥤' },
+      { categoryId: 'nl-cat-clothes', article: 'de', word: 'sok', placeholderEmoji: '🧦' },
+      { categoryId: 'nl-cat-clothes', article: 'de', word: 'schoen', placeholderEmoji: '👟' },
+      { categoryId: 'nl-cat-clothes', article: 'de', word: 'jas', placeholderEmoji: '🧥' },
+      { categoryId: 'nl-cat-clothes', article: 'de', word: 'broek', placeholderEmoji: '👖' },
+      { categoryId: 'nl-cat-toys', article: 'de', word: 'bal', placeholderEmoji: '⚽' },
+      { categoryId: 'nl-cat-toys', article: 'de', word: 'beer', placeholderEmoji: '🧸' },
+      { categoryId: 'nl-cat-toys', article: 'het', word: 'boek', placeholderEmoji: '📖' },
+      { categoryId: 'nl-cat-toys', article: 'de', word: 'auto', placeholderEmoji: '🚗' },
+    ],
+  },
+  pl: { categories: [], words: [] },
+};
 
-const SEED_WORDS = [
-  { categoryId: 'cat-breakfast', article: 'de', word: 'banaan', placeholderEmoji: '🍌' },
-  { categoryId: 'cat-breakfast', article: 'de', word: 'melk', placeholderEmoji: '🥛' },
-  { categoryId: 'cat-breakfast', article: 'het', word: 'brood', placeholderEmoji: '🍞' },
-  { categoryId: 'cat-breakfast', article: 'de', word: 'lepel', placeholderEmoji: '🥄' },
-  { categoryId: 'cat-breakfast', article: 'de', word: 'beker', placeholderEmoji: '🥤' },
-  { categoryId: 'cat-clothes', article: 'de', word: 'sok', placeholderEmoji: '🧦' },
-  { categoryId: 'cat-clothes', article: 'de', word: 'schoen', placeholderEmoji: '👟' },
-  { categoryId: 'cat-clothes', article: 'de', word: 'jas', placeholderEmoji: '🧥' },
-  { categoryId: 'cat-clothes', article: 'de', word: 'broek', placeholderEmoji: '👖' },
-  { categoryId: 'cat-toys', article: 'de', word: 'bal', placeholderEmoji: '⚽' },
-  { categoryId: 'cat-toys', article: 'de', word: 'beer', placeholderEmoji: '🧸' },
-  { categoryId: 'cat-toys', article: 'het', word: 'boek', placeholderEmoji: '📖' },
-  { categoryId: 'cat-toys', article: 'de', word: 'auto', placeholderEmoji: '🚗' },
-];
+const SEED_VERSION = 1;
+const seedMarkerKey = (language) => `seed:${language}:v${SEED_VERSION}`;
 
-export async function ensureSeeded() {
-  const seededFlag = await get('meta', 'seeded');
-  if (seededFlag) return false;
+// Seed one language's starter content, at most once per language+version.
+// Per-language markers (instead of one global flag) mean Polish content added
+// later will still seed on devices that were set up in Dutch-only days.
+//
+// Legacy backfill: installs from before multi-language used a single 'seeded'
+// flag and already hold the Dutch starter set (or the parent's own words). For
+// those we record the Dutch marker WITHOUT re-seeding, so we never dump seed
+// words on top of real data.
+export async function ensureSeeded(language = 'nl') {
+  const data = SEED_DATA[language];
+  if (!data || data.categories.length === 0) return false; // nothing to seed yet (e.g. Polish)
 
-  for (const category of SEED_CATEGORIES) {
-    await put('categories', { ...category, createdAt: Date.now() });
+  const marker = seedMarkerKey(language);
+  if (await get('meta', marker)) return false;
+
+  const legacySeeded = await get('meta', 'seeded');
+  if (legacySeeded && language === 'nl') {
+    await put('meta', { key: marker, value: true });
+    return false;
   }
-  for (const w of SEED_WORDS) {
-    const now = Date.now();
+
+  const now = Date.now();
+  for (const category of data.categories) {
+    await put('categories', { ...category, language, createdAt: now });
+  }
+  for (const w of data.words) {
     await put('words', {
       id: newId(),
       categoryId: w.categoryId,
-      language: 'nl',
+      language,
       article: w.article,
       word: w.word,
       photo: null,
@@ -237,6 +266,9 @@ export async function ensureSeeded() {
       realWorldPrompt: `Find ${w.article} ${w.word}`,
       understandingStatus: 'not_introduced',
       speechStatus: 'none',
+      excluded: false,
+      srsLevel: 0,
+      nextReviewDate: null,
       dateIntroduced: null,
       lastPracticed: null,
       timesPracticed: 0,
@@ -244,6 +276,9 @@ export async function ensureSeeded() {
       updatedAt: now,
     });
   }
+  await put('meta', { key: marker, value: true });
+  // Keep the legacy flag current so the shared-import gate (first-ever open)
+  // still behaves and future backfills short-circuit.
   await put('meta', { key: 'seeded', value: true });
   return true;
 }
