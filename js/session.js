@@ -7,9 +7,9 @@ import {
   wordLabel,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=14';
-import { playBlobSequence, unlockAudio } from './media.js?v=14';
-import { el, shuffle, onTap } from './dom.js?v=14';
+} from './db.js?v=15';
+import { playBlobSequence, unlockAudio } from './media.js?v=15';
+import { el, shuffle, onTap } from './dom.js?v=15';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -55,10 +55,17 @@ function selectSessionWords(eligibleInCategory, now = Date.now()) {
   const due = eligibleInCategory.filter((w) => isDue(w, now)).sort(byUnderstandingThenRecency);
   if (due.length >= MAX_SESSION_WORDS) return due.slice(0, MAX_SESSION_WORDS);
 
-  // Fill remaining slots with the soonest-upcoming future words.
+  // Fill remaining slots with the soonest-upcoming future words. This path
+  // also carries same-day repeat sessions (after one round, every word is
+  // scheduled for tomorrow, so none are "due"). Order by soonest due, then
+  // least-understood/least-recent — so a word just marked "understood"
+  // doesn't lead a same-day repeat just because of its position in the list.
   const upcoming = eligibleInCategory
     .filter((w) => !isDue(w, now))
-    .sort((a, b) => (a.nextReviewDate ?? 0) - (b.nextReviewDate ?? 0));
+    .sort((a, b) => {
+      const byDate = (a.nextReviewDate ?? 0) - (b.nextReviewDate ?? 0);
+      return byDate !== 0 ? byDate : byUnderstandingThenRecency(a, b);
+    });
   return [...due, ...upcoming].slice(0, MAX_SESSION_WORDS);
 }
 

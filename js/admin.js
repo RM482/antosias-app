@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=14';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=14';
-import { startSession, initSession } from './session.js?v=14';
-import { el } from './dom.js?v=14';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=14';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=15';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=15';
+import { startSession, initSession } from './session.js?v=15';
+import { el } from './dom.js?v=15';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=15';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
