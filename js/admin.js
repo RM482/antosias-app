@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=13';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=13';
-import { startSession, initSession } from './session.js?v=13';
-import { el } from './dom.js?v=13';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=13';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=14';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=14';
+import { startSession, initSession } from './session.js?v=14';
+import { el } from './dom.js?v=14';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=14';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -19,11 +19,15 @@ function current() {
   return stack[stack.length - 1];
 }
 
-function topbar({ title, onBack, onAdd }) {
+function topbar({ title, onBack, onAdd, onSettings }) {
   const bar = el('div', { class: 'topbar' });
   if (onBack) bar.appendChild(el('button', { class: 'icon-btn', text: '‹ Back', onclick: onBack }));
   bar.appendChild(el('h1', { text: title }));
-  if (onAdd) bar.appendChild(el('button', { class: 'icon-btn', text: '+ Add', onclick: onAdd }));
+  const actions = el('div', { class: 'topbar-actions' });
+  if (onSettings)
+    actions.appendChild(el('button', { class: 'icon-btn', text: '⚙️', 'aria-label': 'Settings', onclick: onSettings }));
+  if (onAdd) actions.appendChild(el('button', { class: 'icon-btn', text: '+ Add', onclick: onAdd }));
+  bar.appendChild(actions);
   return bar;
 }
 
@@ -184,7 +188,11 @@ async function renderCategories() {
   categories.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   appEl.appendChild(
-    topbar({ title: "Antosia's app", onAdd: () => push({ screen: 'categoryEdit', categoryId: null }) })
+    topbar({
+      title: "Antosia's app",
+      onSettings: () => push({ screen: 'settings' }),
+      onAdd: () => push({ screen: 'categoryEdit', categoryId: null }),
+    })
   );
 
   const screen = el('div', { class: 'screen' });
@@ -243,7 +251,7 @@ async function renderCategories() {
   // messaging. Backup = safety copy for yourself, never size-gated.
   // Share = destined for a public-if-you-have-the-link Gist, so it gets a
   // privacy warning and a size check first.
-  function exportButton({ label, busyLabel, options, beforeExport, doneMessage }) {
+  function exportButton({ label, busyLabel, options, beforeExport, doneMessage, onSuccess }) {
     return el('button', {
       class: 'btn-secondary',
       text: label,
@@ -255,6 +263,9 @@ async function renderCategories() {
         btn.textContent = busyLabel;
         try {
           const { method, sizeMB } = await exportAndShare(options);
+          // 'cancelled' means the user backed out of the share sheet or the
+          // size warning — nothing left the phone, so don't record it.
+          if (method !== 'cancelled' && onSuccess) await onSuccess();
           if (method === 'download') alert(doneMessage(sizeMB));
         } catch (err) {
           alert(`Export failed: ${err.message}`);
@@ -271,6 +282,7 @@ async function renderCategories() {
       label: '💾 Save backup',
       busyLabel: 'Preparing backup…',
       options: {},
+      onSuccess: () => saveSettings({ lastBackupAt: Date.now() }),
       doneMessage: (sizeMB) =>
         `Backup saved (~${sizeMB} MB) as "antosias-app-export.json". Keep it somewhere safe — Files, iCloud Drive, or AirDrop it to your computer. It contains everything: words, photos, and recordings.`,
     })
@@ -706,6 +718,110 @@ async function renderWordEdit({ categoryId, wordId }) {
   appEl.appendChild(screen);
 }
 
+// --- Settings screen -----------------------------------------------------
+
+function formatBackupDate(ms) {
+  if (!ms) return 'never';
+  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function card(title, children) {
+  return el('div', { class: 'settings-card' }, [el('h2', { class: 'settings-card-title', text: title }), ...children]);
+}
+
+async function renderSettings() {
+  appEl.appendChild(topbar({ title: 'Settings', onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+
+  const [settings, storage] = await Promise.all([getSettings(), getStorageStatus()]);
+
+  // --- Backup reminder ---
+  const last = settings.lastBackupAt;
+  const daysSince = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  const overdue = last == null || daysSince >= 30;
+  const backupChildren = [
+    el('p', { class: 'settings-line', text: `Last backup: ${formatBackupDate(last)}` }),
+  ];
+  if (overdue) {
+    backupChildren.push(
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text:
+          last == null
+            ? "You haven't saved a backup yet. Tap “Save backup” on the home screen to keep a safe copy of your words, photos, and recordings."
+            : `It's been about ${daysSince} days since your last backup. A monthly backup is a good habit.`,
+      })
+    );
+  } else {
+    backupChildren.push(
+      el('p', { class: 'settings-note', text: 'Saving a backup roughly once a month is a good habit.' })
+    );
+  }
+  screen.appendChild(card('Backups', backupChildren));
+
+  // --- Storage status (honest wording: no false guarantees) ---
+  const storageChildren = [];
+  if (!storage.supported) {
+    storageChildren.push(el('p', { class: 'settings-note', text: 'Storage details are not available in this browser.' }));
+  } else {
+    storageChildren.push(
+      el('p', {
+        class: 'settings-line',
+        text: `Persistent storage: ${storage.persisted ? 'granted' : 'not granted'}`,
+      })
+    );
+    storageChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: storage.persisted
+          ? 'The browser has agreed to keep this app’s data. A backup is still your real safety net.'
+          : 'The browser has not guaranteed to keep this app’s data, so keep a recent backup.',
+      })
+    );
+    if (storage.usageBytes != null) {
+      storageChildren.push(
+        el('p', {
+          class: 'settings-line',
+          text: `Using about ${(storage.usageBytes / 1024 / 1024).toFixed(1)} MB (approximate).`,
+        })
+      );
+    }
+  }
+  screen.appendChild(card('Storage', storageChildren));
+
+  // --- Guided Access instructions ---
+  const steps = [
+    'One-time setup: open the iPhone Settings app → Accessibility → Guided Access. Turn it on and set a passcode.',
+    'Open Antosia’s app first, then triple-click the side button (the on/off button). If a menu appears, choose Guided Access.',
+    'Tap Start (top right). The phone is now locked to this app.',
+    'To finish: triple-click the side button again, enter your passcode, then tap End.',
+  ];
+  const list = el('ol', { class: 'settings-steps' });
+  for (const s of steps) list.appendChild(el('li', { text: s }));
+  screen.appendChild(
+    card('🔒 Lock the phone to this app (Guided Access)', [
+      el('p', {
+        class: 'settings-note',
+        text: 'Guided Access is Apple’s way to keep a toddler inside one app so taps can’t escape to the rest of the phone.',
+      }),
+      list,
+      el('a', {
+        class: 'settings-link',
+        text: 'Apple’s official Guided Access guide ↗',
+        href: 'https://support.apple.com/en-us/111795',
+        target: '_blank',
+        rel: 'noopener',
+      }),
+      el('p', {
+        class: 'settings-note',
+        text: 'The exact buttons can vary slightly by iPhone model and iOS version — the link above always has the current steps.',
+      }),
+    ])
+  );
+
+  appEl.appendChild(screen);
+}
+
 // --- Render dispatch + init -----------------------------------------------------
 
 async function render() {
@@ -715,6 +831,7 @@ async function render() {
   if (view.screen === 'categoryEdit') return renderCategoryEdit(view);
   if (view.screen === 'words') return renderWords(view);
   if (view.screen === 'wordEdit') return renderWordEdit(view);
+  if (view.screen === 'settings') return renderSettings();
 }
 
 initSession(() => {

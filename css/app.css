@@ -145,6 +145,12 @@ p {
   flex: 1;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .icon-btn {
   appearance: none;
   border: none;
@@ -673,4 +679,53 @@ p {
 .parent-gate-fill.filling {
   transition: transform 3s linear;
   transform: scaleX(1);
+}
+
+/* --- Settings screen --- */
+.settings-card {
+  background: var(--card-bg);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.settings-card-title {
+  font-size: 1rem;
+  margin: 0 0 10px;
+}
+
+.settings-line {
+  margin: 6px 0;
+  font-size: 0.95rem;
+}
+
+.settings-note {
+  margin: 6px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.settings-note-warn {
+  color: #8a5a1f;
+}
+
+.settings-steps {
+  margin: 8px 0;
+  padding-left: 1.3em;
+}
+
+.settings-steps li {
+  margin: 8px 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.settings-link {
+  display: inline-block;
+  margin: 8px 0 2px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
 }

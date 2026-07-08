@@ -7,9 +7,9 @@ import {
   wordLabel,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=13';
-import { playBlobSequence, unlockAudio } from './media.js?v=13';
-import { el, shuffle, onTap } from './dom.js?v=13';
+} from './db.js?v=14';
+import { playBlobSequence, unlockAudio } from './media.js?v=14';
+import { el, shuffle, onTap } from './dom.js?v=14';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -247,13 +247,18 @@ function renderGameStage(state) {
     class: 'session-continue btn-secondary',
     text: '🔊 Hear it again',
   });
-  onTap(hearAgainBtn, () => {
+  function sayWord() {
     unlockAudio();
     playBlobSequence([word.audioWord]).catch(() => {});
-  });
+  }
+  onTap(hearAgainBtn, sayWord);
   screen.appendChild(hearAgainBtn);
 
   sessionEl.appendChild(screen);
+
+  // Say the target word aloud as the two choices appear, so she hears it
+  // ("banaan") and then has to find it. Same audio the button replays.
+  sayWord();
 }
 
 function renderPromptStage(state) {

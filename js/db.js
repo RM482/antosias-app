@@ -148,6 +148,50 @@ export async function requestPersistentStorage() {
   return { supported: true, persisted, estimate };
 }
 
+// Read-only status for the settings screen — never re-requests persistence,
+// just reports what's true now. Every call tolerates the API being missing
+// or rejecting (e.g. in private-browsing contexts) rather than throwing.
+export async function getStorageStatus() {
+  const status = { supported: false, persisted: false, usageBytes: null };
+  if (!navigator.storage) return status;
+  status.supported = true;
+  try {
+    if (navigator.storage.persisted) status.persisted = await navigator.storage.persisted();
+  } catch {
+    /* leave persisted=false */
+  }
+  try {
+    if (navigator.storage.estimate) {
+      const est = await navigator.storage.estimate();
+      if (est && typeof est.usage === 'number') status.usageBytes = est.usage;
+    }
+  } catch {
+    /* leave usageBytes=null */
+  }
+  return status;
+}
+
+// --- Settings (stored as a single record in the existing `meta` store, so no
+// IndexedDB version upgrade is needed) -----------------------------------------
+
+const DEFAULT_SETTINGS = {
+  language: 'nl',      // reserved for future Polish support; only Dutch today
+  lastBackupAt: null,  // epoch ms of the last "Save backup", or null if never
+};
+
+// Defaults win for any key the stored record is missing, so settings written
+// by an older version of the app never leave a newer field undefined.
+export async function getSettings() {
+  const rec = await get('meta', 'settings');
+  return { ...DEFAULT_SETTINGS, ...(rec && rec.value) };
+}
+
+export async function saveSettings(partial) {
+  const merged = { ...(await getSettings()), ...partial };
+  await put('meta', { key: 'settings', value: merged });
+  return merged;
+}
+
 const SEED_CATEGORIES = [
   { id: 'cat-breakfast', name: 'Breakfast', emoji: '🍳', order: 0 },
   { id: 'cat-clothes', name: 'Clothes', emoji: '👕', order: 1 },
