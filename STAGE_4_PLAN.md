@@ -1,5 +1,15 @@
 # Stage 4 Plan (v2 — revised after Codex review)
 
+> **Status (2026-07-08): COMPLETE and deployed (app v=16).** All steps shipped:
+> hardened all-or-nothing import + same-origin service-worker cache + backup/share
+> split (Step 0), in-app Restore-from-backup button, spaced repetition + exclude
+> words (Step 1), settings screen with storage status/backup reminder/Guided Access
+> card + auto-replay of the word in the find-it game (Steps 2–3), and the invisible
+> multi-language seeding groundwork (Step 4). A real-phone backup was verified
+> restorable. Follow-up during testing: understood words no longer lead same-day
+> repeat sessions. Deferred to a later stage: shipping actual Polish content (with
+> its own display rules — Polish has no de/het articles) and any visible language UI.
+
 **Goal:** Harden the prototype for sustained real-world use (safe backups, safe caching, honest storage info), add spaced repetition and word exclusion, and lay minimal groundwork for Polish — without any change that could endanger the existing on-device data.
 
 **Out of scope (explicitly deferred):** multi-child profiles, real-world practice logging, video, community features, the full Polish language mode (now Stage 5), parent-profile audio metadata, themed packs, progression phases, offline badge.
