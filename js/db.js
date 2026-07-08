@@ -196,12 +196,15 @@ export async function saveSettings(partial) {
 // A few short clips in the parent's own voice, recorded once and stitched onto
 // each word's recording during the find-it game:
 //   clickOnDe / clickOnHet  →  "Klik op de …" / "Klik op het …"  (+ the word)
-//   correction              →  "Nee, dit is …"                    (+ the word)
+//   correctionEen           →  "Nee, dit is een …"  (countable: een mandarijn)
+//   correction              →  "Nee, dit is …"      (mass nouns: brood, melk)
+// Each word picks the correct-form carrier via its `useEen` flag (see below).
 // Stored as Blobs in the existing meta store; absent clips simply mean the game
 // falls back to playing the bare word, so the feature no-ops until recorded.
 const STANDARD_PHRASE_KEYS = {
   clickOnDe: 'phrase-clickon-de',
   clickOnHet: 'phrase-clickon-het',
+  correctionEen: 'phrase-correction-een',
   correction: 'phrase-correction',
 };
 

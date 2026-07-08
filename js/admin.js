@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=17';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=17';
-import { startSession, initSession } from './session.js?v=17';
-import { el } from './dom.js?v=17';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=17';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=18';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=18';
+import { startSession, initSession } from './session.js?v=18';
+import { el } from './dom.js?v=18';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=18';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -558,6 +558,10 @@ async function renderWordEdit({ categoryId, wordId }) {
         realWorldPrompt: '',
         understandingStatus: 'not_introduced',
         speechStatus: 'none',
+        useEen: true, // countable by default; turn off for mass nouns (brood, melk)
+        excluded: false,
+        srsLevel: 0,
+        nextReviewDate: null,
         dateIntroduced: null,
         lastPracticed: null,
         timesPracticed: 0,
@@ -582,6 +586,19 @@ async function renderWordEdit({ categoryId, wordId }) {
       draft.article = v;
       labelPreview.textContent = wordLabel(draft) || ' ';
     },
+  });
+
+  // Controls the wrong-answer correction phrasing in the game:
+  // “een” → "Nee, dit is een mandarijn" (countable); “no een” → "Nee, dit is
+  // brood" (mass nouns like bread/milk). Only affects that spoken correction.
+  buildSegmented(screen, {
+    label: 'Naming it (“dit is …”)',
+    options: [
+      { label: 'een ' + (draft.word || 'woord'), value: 'een' },
+      { label: 'no “een”', value: 'none' },
+    ],
+    value: draft.useEen === false ? 'none' : 'een',
+    onChange: (v) => (draft.useEen = v === 'een'),
   });
 
   screen.appendChild(
@@ -800,13 +817,14 @@ async function renderSettings() {
     el('p', {
       class: 'settings-note',
       text:
-        'Record these three short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Leave them blank to just hear the word on its own.',
+        'Record these short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Trail off naturally, as if the word comes next. Leave them blank to just hear the word on its own.',
     })
   );
   const phraseSpecs = [
     { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
     { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
-    { name: 'correction', title: 'Gentle correction — say: “Nee, dit is …”' },
+    { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
+    { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
   ];
   for (const spec of phraseSpecs) {
     buildAudioControl(phraseBox, {

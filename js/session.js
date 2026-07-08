@@ -8,9 +8,9 @@ import {
   getStandardPhrases,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=17';
-import { playBlobSequence, unlockAudio } from './media.js?v=17';
-import { el, shuffle, onTap } from './dom.js?v=17';
+} from './db.js?v=18';
+import { playBlobSequence, unlockAudio } from './media.js?v=18';
+import { el, shuffle, onTap } from './dom.js?v=18';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -249,12 +249,15 @@ function renderGameStage(state) {
     unlockAudio();
     playBlobSequence([promptCarrier(word, phrases), word.audioWord].filter(Boolean)).catch(() => {});
   }
-  // "Nee, dit is" + the wrong word she tapped → "Nee, dit is brood". Only
-  // speaks if the correction clip has been recorded; otherwise just the wiggle.
+  // Names the wrong word she tapped, with Dutch-correct phrasing: countable
+  // words use the "een" carrier ("Nee, dit is een mandarijn"), mass nouns use
+  // the plain one ("Nee, dit is brood"). useEen defaults on, so only mass
+  // nouns need turning off. Speaks only if the matching clip was recorded.
   function sayCorrection(wrongWord) {
-    if (!phrases?.correction) return;
+    const carrier = wrongWord.useEen === false ? phrases?.correction : phrases?.correctionEen;
+    if (!carrier) return;
     unlockAudio();
-    playBlobSequence([phrases.correction, wrongWord.audioWord].filter(Boolean)).catch(() => {});
+    playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});
   }
 
   let answered = false;
