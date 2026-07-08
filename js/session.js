@@ -1,9 +1,26 @@
-import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=9';
-import { playBlobSequence, unlockAudio } from './media.js?v=9';
-import { el, shuffle } from './dom.js?v=9';
+import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=10';
+import { playBlobSequence, unlockAudio } from './media.js?v=10';
+import { el, shuffle, onTap } from './dom.js?v=10';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
+
+// While a session is on screen, block the touch gestures a toddler triggers
+// by accident: finger-drags that scroll/rubber-band the page (except inside
+// deliberately scrollable .allow-scroll areas) and iOS pinch-zoom
+// (gesturestart/gesturechange are Safari's pinch events).
+sessionEl.addEventListener(
+  'touchmove',
+  (e) => {
+    if (!e.target.closest('.allow-scroll')) e.preventDefault();
+  },
+  { passive: false }
+);
+for (const type of ['gesturestart', 'gesturechange']) {
+  document.addEventListener(type, (e) => {
+    if (!sessionEl.hidden) e.preventDefault();
+  });
+}
 
 let exitCallback = null;
 export function initSession(onExit) {
@@ -158,18 +175,19 @@ function renderListenStage(state) {
       // Ignore playback errors from rapid repeated taps.
     }
   }
-  photoBtn.addEventListener('click', playWord);
+  onTap(photoBtn, playWord);
 
-  screen.appendChild(
-    el('button', {
-      class: 'session-continue',
-      text: "Let's find it!",
-      onclick: () => {
-        state.stage = distractor ? 'game' : 'prompt';
-        renderStep(state);
-      },
-    })
-  );
+  const findBtn = el('button', {
+    type: 'button',
+    class: 'find-btn',
+    text: '🔍',
+    'aria-label': "Let's find it!",
+  });
+  onTap(findBtn, () => {
+    state.stage = distractor ? 'game' : 'prompt';
+    renderStep(state);
+  });
+  screen.appendChild(findBtn);
 
   sessionEl.appendChild(screen);
   playWord();
@@ -183,11 +201,14 @@ function renderGameStage(state) {
   const optionsWrap = el('div', { class: 'session-options' });
   const options = shuffle([word, distractor]);
 
+  let answered = false;
   for (const opt of options) {
     const btn = el('button', { type: 'button', class: 'session-option' });
     btn.appendChild(wordVisual(opt, 'session-option-photo'));
-    btn.addEventListener('click', () => {
+    onTap(btn, () => {
+      if (answered) return;
       if (opt.id === word.id) {
+        answered = true;
         btn.classList.add('correct');
         setTimeout(() => {
           state.stage = 'prompt';
@@ -202,16 +223,16 @@ function renderGameStage(state) {
   }
   screen.appendChild(optionsWrap);
 
-  screen.appendChild(
-    el('button', {
-      class: 'session-continue btn-secondary',
-      text: '🔊 Hear it again',
-      onclick: () => {
-        unlockAudio();
-        playBlobSequence([word.audioWord]).catch(() => {});
-      },
-    })
-  );
+  const hearAgainBtn = el('button', {
+    type: 'button',
+    class: 'session-continue btn-secondary',
+    text: '🔊 Hear it again',
+  });
+  onTap(hearAgainBtn, () => {
+    unlockAudio();
+    playBlobSequence([word.audioWord]).catch(() => {});
+  });
+  screen.appendChild(hearAgainBtn);
 
   sessionEl.appendChild(screen);
 }
@@ -226,22 +247,20 @@ function renderPromptStage(state) {
       text: word.realWorldPrompt || `Try using "${wordLabel(word)}" together right now.`,
     })
   );
-  screen.appendChild(
-    el('button', {
-      class: 'session-continue',
-      text: 'Continue when done',
-      onclick: () => {
-        state.index += 1;
-        state.stage = 'listen';
-        renderStep(state);
-      },
-    })
-  );
+  const continueBtn = el('button', { type: 'button', class: 'session-continue', text: 'Continue when done' });
+  onTap(continueBtn, () => {
+    state.index += 1;
+    state.stage = 'listen';
+    renderStep(state);
+  });
+  screen.appendChild(continueBtn);
   sessionEl.appendChild(screen);
 }
 
 function renderEndScreen(state) {
-  const screen = el('div', { class: 'session-screen end-stage' });
+  // allow-scroll: the observation list can outgrow small screens, and the
+  // session-wide touchmove blocker exempts this class.
+  const screen = el('div', { class: 'session-screen end-stage allow-scroll' });
   screen.appendChild(el('div', { class: 'session-end-title', text: 'Great session!' }));
 
   const wordNames = state.steps.map((s) => wordLabel(s.word)).join(', ');
@@ -263,13 +282,13 @@ function renderEndScreen(state) {
     row.appendChild(el('div', { class: 'session-obs-label', text: wordLabel(word) }));
 
     const understoodBtn = el('button', { type: 'button', class: 'obs-btn', text: '👂 Understood' });
-    understoodBtn.addEventListener('click', () => {
+    onTap(understoodBtn, () => {
       obs.understood = !obs.understood;
       understoodBtn.classList.toggle('active', obs.understood);
     });
 
     const saidBtn = el('button', { type: 'button', class: 'obs-btn', text: '🗣️ Said it' });
-    saidBtn.addEventListener('click', () => {
+    onTap(saidBtn, () => {
       obs.said = !obs.said;
       saidBtn.classList.toggle('active', obs.said);
     });
@@ -280,16 +299,12 @@ function renderEndScreen(state) {
   }
   screen.appendChild(list);
 
-  screen.appendChild(
-    el('button', {
-      class: 'session-continue',
-      text: 'Done',
-      onclick: async () => {
-        await saveObservations(state);
-        exitSession();
-      },
-    })
-  );
+  const doneBtn = el('button', { type: 'button', class: 'session-continue', text: 'Done' });
+  onTap(doneBtn, async () => {
+    await saveObservations(state);
+    exitSession();
+  });
+  screen.appendChild(doneBtn);
 
   sessionEl.appendChild(screen);
 }

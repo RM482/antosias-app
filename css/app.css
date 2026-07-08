@@ -387,6 +387,18 @@ p {
   z-index: 10;
   display: flex;
   flex-direction: column;
+  /* Toddler-proofing: no double-tap zoom, no long-press save/copy menus,
+     no accidental text selection anywhere inside a session. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#session img {
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
 }
 
 #session[hidden] {
@@ -446,6 +458,46 @@ p {
   padding: 16px 32px;
   border-radius: 999px;
   min-width: 220px;
+}
+
+/* Wordless "let's find it" button: a big magnifying glass with a slow,
+   calm breathing pulse — inviting, not flashy. */
+.find-btn {
+  appearance: none;
+  border: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--accent);
+  font-size: 2.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  animation: find-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes find-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .find-btn {
+    animation: none;
+  }
+}
+
+.end-stage {
+  overflow-y: auto;
+  justify-content: flex-start;
+  padding-top: 40px;
 }
 
 .session-options {
