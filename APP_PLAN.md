@@ -1,8 +1,15 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 7 July 2026)
+## Status (as of 8 July 2026)
 
-**Stages 1–3 are built, deployed, and verified working on the real iPhone.** Stage 4 (polish) is deliberately parked while the app gets real-world use first.
+**Stages 1–3 are built, deployed, and verified working on the real iPhone — including first real use with Antosia, who loved it.** Her real-toddler-hands feedback drove a round of touch-interaction fixes (below). Stage 4 (polish) is up next.
+
+**Toddler-hands fixes from real use (8 July 2026):**
+- She often held/dragged rather than cleanly tapping, so browser `click` events frequently never fired. All session-mode buttons now respond on `touchend` (finger lift) via a shared `onTap` helper in `dom.js`, regardless of hold duration or wobble; `click` stays as the desktop fallback. The mini-game also now guards against double-advancing on rapid repeat taps.
+- Pinching/dragging was zooming the page and breaking touch. Fixed with `user-scalable=no` on the viewport, a `touchmove` blocker in session mode (except inside `.allow-scroll` areas — the now-scrollable end screen), suppressing Safari's `gesturestart`/`gesturechange` pinch events while a session is open, and disabling long-press callouts/text-selection inside sessions.
+- Replaced the text-only "Let's find it!" button with a big round pulsing 🔍 magnifying-glass button — no reading required.
+
+**Confirmed with the user: code updates never touch on-device data.** Photos/audio/categories live in IndexedDB, entirely separate from the deployed code; `ensureSeeded()` only ever seeds once. Safe to invest real time building out content. The real risks are deleting the Home Screen icon (never do this) or very-long-inactivity storage eviction — mitigate with periodic "Export for sharing" as a personal backup too.
 
 - **Live app:** https://rm482.github.io/antosias-app/ — dedicated public repo `RM482/antosias-app`, deployed via GitHub Pages (push to `main` = deploy). Installed on the parent's iPhone via Add to Home Screen.
 - **Stage 1 (spike):** camera capture, mic recording, IndexedDB Blob persistence, and standalone install all confirmed on-device. Harness kept at `spike.html` for future iOS debugging.

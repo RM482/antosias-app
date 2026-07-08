@@ -13,6 +13,7 @@ The user is a complete beginner (first git/terminal/GitHub experience). **Always
 - **Cache-busting:** all internal imports/links carry `?v=N`. Bump N in *every* file that references it (`index.html` + `js/*.js`, one `sed` pass) whenever shipping a change. The service worker (`sw.js`, network-first) handles freshness for installed apps, but keep bumping `?v=N` anyway.
 - `spike.html` is a kept-on-purpose iOS test harness — don't delete.
 - Syntax-check with `node --check js/*.js` before committing.
+- **Toddler touch handling:** in child session mode (`session.js`), always wire buttons with `onTap()` from `dom.js`, not raw `click` listeners — real toddler-hands testing showed plain `click` misses holds/drags/wobbly presses. `onTap` fires on `touchend` (any hold length) with `click` as a desktop fallback. Session mode also blocks pinch-zoom and page-drag by default (`touchmove` is prevented unless the element is inside `.allow-scroll`) — add that class to any session content that must scroll.
 
 ## Deploy & sharing
 
