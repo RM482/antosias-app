@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=18';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=18';
-import { startSession, initSession } from './session.js?v=18';
-import { el } from './dom.js?v=18';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=18';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=19';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=19';
+import { startSession, initSession } from './session.js?v=19';
+import { el } from './dom.js?v=19';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=19';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -53,6 +53,14 @@ function buildSegmented(container, { label, options, value, onChange }) {
   refresh();
   wrap.appendChild(seg);
   container.appendChild(wrap);
+  // setValue updates the highlighted option without firing onChange — used to
+  // reflect an auto-computed default (e.g. "een" vs mass noun) as it changes.
+  return {
+    setValue(v) {
+      value = v;
+      refresh();
+    },
+  };
 }
 
 function buildPhotoControl(container, draft) {
@@ -591,14 +599,24 @@ async function renderWordEdit({ categoryId, wordId }) {
   // Controls the wrong-answer correction phrasing in the game:
   // “een” → "Nee, dit is een mandarijn" (countable); “no een” → "Nee, dit is
   // brood" (mass nouns like bread/milk). Only affects that spoken correction.
-  buildSegmented(screen, {
+  //
+  // The default is auto-guessed from the word (common mass nouns → no "een").
+  // We keep auto-guessing as the parent types UNTIL they set it by hand; a
+  // word that already had an explicit choice saved is left as-is.
+  const eenExplicit = existing && typeof existing.useEen === 'boolean';
+  let eenTouched = !!eenExplicit;
+  draft.useEen = eenExplicit ? existing.useEen : guessUsesEen(draft.word);
+  const eenSeg = buildSegmented(screen, {
     label: 'Naming it (“dit is …”)',
     options: [
-      { label: 'een ' + (draft.word || 'woord'), value: 'een' },
+      { label: 'een …', value: 'een' },
       { label: 'no “een”', value: 'none' },
     ],
-    value: draft.useEen === false ? 'none' : 'een',
-    onChange: (v) => (draft.useEen = v === 'een'),
+    value: draft.useEen ? 'een' : 'none',
+    onChange: (v) => {
+      draft.useEen = v === 'een';
+      eenTouched = true; // stop auto-guessing once the parent decides
+    },
   });
 
   screen.appendChild(
@@ -611,6 +629,10 @@ async function renderWordEdit({ categoryId, wordId }) {
         oninput: (e) => {
           draft.word = e.target.value;
           labelPreview.textContent = wordLabel(draft) || ' ';
+          if (!eenTouched) {
+            draft.useEen = guessUsesEen(draft.word);
+            eenSeg.setValue(draft.useEen ? 'een' : 'none');
+          }
         },
       }),
     ])

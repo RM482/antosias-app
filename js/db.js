@@ -224,6 +224,28 @@ export async function saveStandardPhrase(name, blob) {
   await put('meta', { key, value: blob });
 }
 
+// Common Dutch mass/uncountable nouns a toddler meets — mostly drinks, foods
+// and substances that are named without "een" ("dit is melk", "dit is brood").
+// Used only to pick a sensible default for a word's `useEen` flag; the parent
+// can always override. Countability is genuinely context-dependent, so
+// ambiguous homonyms (bloem = flower/flour, ijs = ice/ice-cream) are left OUT
+// on purpose and default to "een".
+const DUTCH_MASS_NOUNS = new Set([
+  'water', 'melk', 'sap', 'appelsap', 'sinaasappelsap', 'druivensap', 'thee', 'koffie',
+  'limonade', 'chocolademelk', 'brood', 'rijst', 'pasta', 'macaroni', 'kaas', 'boter',
+  'yoghurt', 'kwark', 'suiker', 'zout', 'peper', 'honing', 'jam', 'pindakaas', 'hagelslag',
+  'muesli', 'pap', 'soep', 'saus', 'ketchup', 'mayonaise', 'mosterd', 'vlees', 'gehakt',
+  'fruit', 'chocola', 'chocolade', 'snoep', 'zand', 'sneeuw', 'regen', 'modder', 'klei',
+  'verf', 'lijm', 'zeep', 'shampoo', 'tandpasta', 'speelgoed', 'papier', 'wol', 'muziek',
+]);
+
+// Best-effort default: true = named with "een" (countable), false = mass noun.
+// Empty input defaults to "een".
+export function guessUsesEen(word) {
+  const w = (word || '').trim().toLowerCase();
+  return w ? !DUTCH_MASS_NOUNS.has(w) : true;
+}
+
 // Seed content, keyed by language. Category ids are language-prefixed so a
 // future second language can't collide with Dutch. Polish is intentionally
 // empty for now — the plumbing is ready, the content lands in a later stage.

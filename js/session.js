@@ -8,9 +8,9 @@ import {
   getStandardPhrases,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=18';
-import { playBlobSequence, unlockAudio } from './media.js?v=18';
-import { el, shuffle, onTap } from './dom.js?v=18';
+} from './db.js?v=19';
+import { playBlobSequence, unlockAudio } from './media.js?v=19';
+import { el, shuffle, onTap } from './dom.js?v=19';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');

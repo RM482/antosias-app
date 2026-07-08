@@ -1,4 +1,4 @@
-import { getAll, putAllTransactional } from './db.js?v=18';
+import { getAll, putAllTransactional } from './db.js?v=19';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
