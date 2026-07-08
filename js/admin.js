@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=16';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=16';
-import { startSession, initSession } from './session.js?v=16';
-import { el } from './dom.js?v=16';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=16';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=17';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=17';
+import { startSession, initSession } from './session.js?v=17';
+import { el } from './dom.js?v=17';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=17';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -733,7 +733,11 @@ async function renderSettings() {
   appEl.appendChild(topbar({ title: 'Settings', onBack: () => pop() }));
   const screen = el('div', { class: 'screen' });
 
-  const [settings, storage] = await Promise.all([getSettings(), getStorageStatus()]);
+  const [settings, storage, phrases] = await Promise.all([
+    getSettings(),
+    getStorageStatus(),
+    getStandardPhrases(),
+  ]);
 
   // --- Backup reminder ---
   const last = settings.lastBackupAt;
@@ -788,6 +792,53 @@ async function renderSettings() {
     }
   }
   screen.appendChild(card('Storage', storageChildren));
+
+  // --- Standard game phrases (recorded once, reused for every word) ---
+  const phraseDraft = { ...phrases };
+  const phraseBox = el('div', {});
+  phraseBox.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text:
+        'Record these three short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Leave them blank to just hear the word on its own.',
+    })
+  );
+  const phraseSpecs = [
+    { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
+    { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
+    { name: 'correction', title: 'Gentle correction — say: “Nee, dit is …”' },
+  ];
+  for (const spec of phraseSpecs) {
+    buildAudioControl(phraseBox, {
+      title: spec.title,
+      maxMs: 5000,
+      getBlob: () => phraseDraft[spec.name],
+      setBlob: (b) => (phraseDraft[spec.name] = b),
+      required: false,
+    });
+  }
+  const savePhrasesBtn = el('button', {
+    text: 'Save phrases',
+    style: 'margin-top:6px;width:100%;',
+    onclick: async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        for (const spec of phraseSpecs) {
+          if (phraseDraft[spec.name]) await saveStandardPhrase(spec.name, phraseDraft[spec.name]);
+        }
+        alert('Saved. These phrases will play during the find-it game.');
+      } catch (err) {
+        alert(`Could not save: ${errText(err)}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save phrases';
+      }
+    },
+  });
+  phraseBox.appendChild(savePhrasesBtn);
+  screen.appendChild(card('🔊 Standard game phrases', [phraseBox]));
 
   // --- Guided Access instructions ---
   const steps = [

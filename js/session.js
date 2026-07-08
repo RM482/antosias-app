@@ -5,11 +5,12 @@ import {
   isSessionEligible,
   isDue,
   wordLabel,
+  getStandardPhrases,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=16';
-import { playBlobSequence, unlockAudio } from './media.js?v=16';
-import { el, shuffle, onTap } from './dom.js?v=16';
+} from './db.js?v=17';
+import { playBlobSequence, unlockAudio } from './media.js?v=17';
+import { el, shuffle, onTap } from './dom.js?v=17';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -78,7 +79,11 @@ function pickDistractor(target, sameCategoryPool, allEligiblePool) {
 }
 
 export async function startSession(categoryId) {
-  const [category, allWords] = await Promise.all([get('categories', categoryId), getAll('words')]);
+  const [category, allWords, phrases] = await Promise.all([
+    get('categories', categoryId),
+    getAll('words'),
+    getStandardPhrases(),
+  ]);
   const eligibleInCategory = allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));
   const allEligible = allWords.filter(isSessionEligible);
 
@@ -98,6 +103,7 @@ export async function startSession(categoryId) {
   const state = {
     category,
     steps,
+    phrases, // reusable carrier recordings: { clickOnDe, clickOnHet, correction }
     index: 0,
     stage: 'listen', // 'listen' | 'game' | 'prompt'
     observations: {}, // wordId -> { understood, said }
@@ -219,13 +225,37 @@ function renderListenStage(state) {
   playWord();
 }
 
+// Carrier clip that matches a word's article, or null (no article / not
+// recorded → the game just plays the bare word, as before).
+function promptCarrier(word, phrases) {
+  if (word.article === 'de') return phrases?.clickOnDe || null;
+  if (word.article === 'het') return phrases?.clickOnHet || null;
+  return null;
+}
+
 function renderGameStage(state) {
   const { word, distractor } = state.steps[state.index];
+  const { phrases } = state;
   const screen = el('div', { class: 'session-screen game-stage' });
   screen.appendChild(el('div', { class: 'session-hint', text: `Find ${wordLabel(word)}` }));
 
   const optionsWrap = el('div', { class: 'session-options' });
   const options = shuffle([word, distractor]);
+
+  // "Klik op de" + "banaan" → "Klik op de banaan". Falls back to the bare
+  // word when the carrier isn't recorded. playBlobSequence chains the clips
+  // through a single audio element, so a tiny seam between them is expected.
+  function sayPrompt() {
+    unlockAudio();
+    playBlobSequence([promptCarrier(word, phrases), word.audioWord].filter(Boolean)).catch(() => {});
+  }
+  // "Nee, dit is" + the wrong word she tapped → "Nee, dit is brood". Only
+  // speaks if the correction clip has been recorded; otherwise just the wiggle.
+  function sayCorrection(wrongWord) {
+    if (!phrases?.correction) return;
+    unlockAudio();
+    playBlobSequence([phrases.correction, wrongWord.audioWord].filter(Boolean)).catch(() => {});
+  }
 
   let answered = false;
   for (const opt of options) {
@@ -243,6 +273,7 @@ function renderGameStage(state) {
       } else {
         btn.classList.add('wiggle');
         setTimeout(() => btn.classList.remove('wiggle'), 500);
+        sayCorrection(opt);
       }
     });
     optionsWrap.appendChild(btn);
@@ -254,18 +285,14 @@ function renderGameStage(state) {
     class: 'session-continue btn-secondary',
     text: '🔊 Hear it again',
   });
-  function sayWord() {
-    unlockAudio();
-    playBlobSequence([word.audioWord]).catch(() => {});
-  }
-  onTap(hearAgainBtn, sayWord);
+  onTap(hearAgainBtn, sayPrompt);
   screen.appendChild(hearAgainBtn);
 
   sessionEl.appendChild(screen);
 
-  // Say the target word aloud as the two choices appear, so she hears it
-  // ("banaan") and then has to find it. Same audio the button replays.
-  sayWord();
+  // Speak the prompt as the two choices appear ("Klik op de banaan"), so she
+  // hears what to look for and then finds it. Same audio the button replays.
+  sayPrompt();
 }
 
 function renderPromptStage(state) {

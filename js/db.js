@@ -192,6 +192,35 @@ export async function saveSettings(partial) {
   return merged;
 }
 
+// --- Standard game phrases (reusable carrier recordings) ----------------------
+// A few short clips in the parent's own voice, recorded once and stitched onto
+// each word's recording during the find-it game:
+//   clickOnDe / clickOnHet  →  "Klik op de …" / "Klik op het …"  (+ the word)
+//   correction              →  "Nee, dit is …"                    (+ the word)
+// Stored as Blobs in the existing meta store; absent clips simply mean the game
+// falls back to playing the bare word, so the feature no-ops until recorded.
+const STANDARD_PHRASE_KEYS = {
+  clickOnDe: 'phrase-clickon-de',
+  clickOnHet: 'phrase-clickon-het',
+  correction: 'phrase-correction',
+};
+
+export async function getStandardPhrases() {
+  const entries = await Promise.all(
+    Object.entries(STANDARD_PHRASE_KEYS).map(async ([name, key]) => {
+      const rec = await get('meta', key);
+      return [name, (rec && rec.value) || null];
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+export async function saveStandardPhrase(name, blob) {
+  const key = STANDARD_PHRASE_KEYS[name];
+  if (!key) throw new Error(`Unknown standard phrase: ${name}`);
+  await put('meta', { key, value: blob });
+}
+
 // Seed content, keyed by language. Category ids are language-prefixed so a
 // future second language can't collide with Dutch. Polish is intentionally
 // empty for now — the plumbing is ready, the content lands in a later stage.
