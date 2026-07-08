@@ -257,6 +257,17 @@ p {
   color: #33632e;
 }
 
+.badge-muted {
+  background: #e6e0d4;
+  color: #7a7263;
+}
+
+/* Excluded ("Skip") words: dimmed so they're visibly set aside, but still
+   fully tappable to edit or re-include. */
+.list-item-muted {
+  opacity: 0.55;
+}
+
 .fab-row {
   margin-top: 4px;
 }

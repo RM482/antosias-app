@@ -1,6 +1,15 @@
-import { getAll, get, put, isSessionEligible, wordLabel } from './db.js?v=12';
-import { playBlobSequence, unlockAudio } from './media.js?v=12';
-import { el, shuffle, onTap } from './dom.js?v=12';
+import {
+  getAll,
+  get,
+  put,
+  isSessionEligible,
+  isDue,
+  wordLabel,
+  SRS_INTERVAL_DAYS,
+  nextReviewAfterDays,
+} from './db.js?v=13';
+import { playBlobSequence, unlockAudio } from './media.js?v=13';
+import { el, shuffle, onTap } from './dom.js?v=13';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -28,19 +37,29 @@ export function initSession(onExit) {
 }
 
 const UNDERSTANDING_RANK = { not_introduced: 0, introduced: 1, understands: 2 };
+const MAX_SESSION_WORDS = 5;
 
-// Least-recently-practised first (never practised sorts first), then
-// preferring words with a lower understanding status.
-function selectSessionWords(eligibleInCategory) {
-  const sorted = [...eligibleInCategory].sort((a, b) => {
-    const aTime = a.lastPracticed ?? 0;
-    const bTime = b.lastPracticed ?? 0;
-    if (aTime !== bTime) return aTime - bTime;
+// Pick up to 5 words for a session. Spaced repetition shapes the order but
+// never blocks a session: due words (and never-scheduled words) come first,
+// least understood then least-recently-practised; if that leaves empty slots
+// we fill them with the words coming due soonest. So a category with 2+
+// eligible words always yields a playable session.
+function selectSessionWords(eligibleInCategory, now = Date.now()) {
+  const byUnderstandingThenRecency = (a, b) => {
     const aRank = UNDERSTANDING_RANK[a.understandingStatus] ?? 0;
     const bRank = UNDERSTANDING_RANK[b.understandingStatus] ?? 0;
-    return aRank - bRank;
-  });
-  return sorted.slice(0, 5);
+    if (aRank !== bRank) return aRank - bRank;
+    return (a.lastPracticed ?? 0) - (b.lastPracticed ?? 0);
+  };
+
+  const due = eligibleInCategory.filter((w) => isDue(w, now)).sort(byUnderstandingThenRecency);
+  if (due.length >= MAX_SESSION_WORDS) return due.slice(0, MAX_SESSION_WORDS);
+
+  // Fill remaining slots with the soonest-upcoming future words.
+  const upcoming = eligibleInCategory
+    .filter((w) => !isDue(w, now))
+    .sort((a, b) => (a.nextReviewDate ?? 0) - (b.nextReviewDate ?? 0));
+  return [...due, ...upcoming].slice(0, MAX_SESSION_WORDS);
 }
 
 function pickDistractor(target, sameCategoryPool, allEligiblePool) {
@@ -327,6 +346,17 @@ async function saveObservations(state) {
       updated.understandingStatus = 'introduced';
     }
     if (obs.said) updated.speechStatus = 'says';
+
+    // Spaced-repetition schedule. Interval is based on the level the word is
+    // AT now (so a first success reinforces the next day: level 0 → 1 day),
+    // and only a positive observation advances the level afterwards. A
+    // toddler's attention wanders, and an untapped button usually means "we
+    // didn't get to it," not "she failed" — so a no-observation session holds
+    // the level (word simply comes due again on the same interval) rather than
+    // resetting or advancing it.
+    const level = Math.min(updated.srsLevel ?? 0, SRS_INTERVAL_DAYS.length - 1);
+    updated.nextReviewDate = nextReviewAfterDays(SRS_INTERVAL_DAYS[level], now);
+    updated.srsLevel = obs.understood ? Math.min(level + 1, SRS_INTERVAL_DAYS.length - 1) : level;
 
     updated.updatedAt = now;
     await put('words', updated);

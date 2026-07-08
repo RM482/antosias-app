@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=12';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=12';
-import { startSession, initSession } from './session.js?v=12';
-import { el } from './dom.js?v=12';
-import { exportAndShare, importFromGist } from './backup.js?v=12';
+import { ensureSeeded, requestPersistentStorage, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=13';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=13';
+import { startSession, initSession } from './session.js?v=13';
+import { el } from './dom.js?v=13';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=13';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -290,6 +290,47 @@ async function renderCategories() {
     })
   );
 
+  // Restore from a backup file the parent saved earlier. A hidden file input
+  // is triggered by the visible button; the picked file is read, parsed, and
+  // imported (merge-by-id, all-or-nothing) so a reinstall or accident is
+  // recoverable on the phone itself, without needing a computer.
+  const restoreInput = el('input', { type: 'file', accept: 'application/json,.json', hidden: '' });
+  restoreInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (
+      !confirm(
+        'Restore from this backup? Words in the file will be added, and any word with the same id will be overwritten by the backup version. Your other words are left as they are.'
+      )
+    )
+      return;
+    try {
+      const text = await file.text();
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        throw new Error('That file is not readable — make sure it is an export from this app.');
+      }
+      const result = await importPayload(payload);
+      const skippedNote = result.skipped ? ` (${result.skipped} unusable entr${result.skipped === 1 ? 'y' : 'ies'} skipped)` : '';
+      alert(`Restored ${result.words} word${result.words === 1 ? '' : 's'} and ${result.categories} categor${result.categories === 1 ? 'y' : 'ies'}${skippedNote}.`);
+      render();
+    } catch (err) {
+      alert(`Restore failed: ${errText(err)}`);
+    }
+  });
+  screen.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: '♻️ Restore from backup',
+      style: 'margin-top:8px;width:100%;',
+      onclick: () => restoreInput.click(),
+    })
+  );
+  screen.appendChild(restoreInput);
+
   appEl.appendChild(screen);
 }
 
@@ -433,7 +474,8 @@ async function renderWords({ categoryId }) {
     const list = el('ul', { class: 'list' });
     for (const w of words) {
       const label = wordLabel(w);
-      const ready = isSessionEligible(w);
+      const excluded = w.excluded === true;
+      const ready = isSessionEligible(w); // already false when excluded
       const thumb = el('div', { class: 'thumb' });
       if (w.photo) {
         const img = el('img', { alt: '' });
@@ -442,21 +484,32 @@ async function renderWords({ categoryId }) {
       } else {
         thumb.textContent = w.placeholderEmoji || '🔤';
       }
+      // Excluded words take priority in the badge — "Skipped" is more useful
+      // than "Needs audio" for a word deliberately kept out of sessions.
+      let badgeClass = 'badge-warning';
+      let badgeText = 'Needs audio';
+      if (excluded) {
+        badgeClass = 'badge-muted';
+        badgeText = 'Skipped';
+      } else if (ready) {
+        badgeClass = 'badge-ok';
+        badgeText = 'Ready';
+      }
       list.appendChild(
         el('li', {}, [
           el(
             'button',
-            { class: 'list-item', onclick: () => push({ screen: 'wordEdit', categoryId, wordId: w.id }) },
+            {
+              class: `list-item${excluded ? ' list-item-muted' : ''}`,
+              onclick: () => push({ screen: 'wordEdit', categoryId, wordId: w.id }),
+            },
             [
               thumb,
               el('div', { class: 'list-item-body' }, [
                 el('div', { class: 'list-item-title', text: label || '(unnamed word)' }),
                 el('div', { class: 'list-item-sub', text: w.phraseText || '' }),
               ]),
-              el('span', {
-                class: `badge ${ready ? 'badge-ok' : 'badge-warning'}`,
-                text: ready ? 'Ready' : 'Needs audio',
-              }),
+              el('span', { class: `badge ${badgeClass}`, text: badgeText }),
             ]
           ),
         ])
@@ -602,6 +655,19 @@ async function renderWordEdit({ categoryId, wordId }) {
     ],
     value: draft.speechStatus,
     onChange: (v) => (draft.speechStatus = v),
+  });
+
+  // Excluding a word she knows well keeps it out of sessions without deleting
+  // it (or its photo/recording). buildSegmented works on strings, so map the
+  // boolean to 'in'/'skip'.
+  buildSegmented(screen, {
+    label: 'In sessions',
+    options: [
+      { label: 'Include', value: 'in' },
+      { label: 'Skip (she knows it)', value: 'skip' },
+    ],
+    value: draft.excluded ? 'skip' : 'in',
+    onChange: (v) => (draft.excluded = v === 'skip'),
   });
 
   const actions = el('div', { class: 'form-actions' });

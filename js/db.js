@@ -103,8 +103,36 @@ export function wordLabel(word) {
   return [word.article, word.word].filter(Boolean).join(' ');
 }
 
+// A word can appear in a session only if it has word audio AND the parent
+// hasn't marked it "skip". This is the single source of truth used
+// everywhere words are counted or picked (session targets, distractors,
+// ready-counts, Start-button state) so an excluded word can never slip in
+// as, say, a distractor.
 export function isSessionEligible(word) {
-  return !!word.audioWord;
+  return !!word.audioWord && word.excluded !== true;
+}
+
+// Spaced repetition: a word is "due" when it has never been scheduled
+// (nextReviewDate absent) or its scheduled time has arrived. Old records
+// from before SRS existed have no nextReviewDate, so they read as due —
+// an intentional, one-time fresh start for scheduling that leaves all
+// existing practice history (timesPracticed, statuses) untouched.
+export function isDue(word, now = Date.now()) {
+  return word.nextReviewDate == null || word.nextReviewDate <= now;
+}
+
+// Days to wait before a word is due again, indexed by srsLevel (0..3).
+// Advancing only happens on a positive observation; see session.js.
+export const SRS_INTERVAL_DAYS = [1, 3, 7, 14];
+
+// Milliseconds from `now` to the start of the local calendar day + N days.
+// Calendar-day based so an evening session makes a word due the next
+// morning, and daylight-saving shifts can't cause off-by-hours surprises.
+export function nextReviewAfterDays(days, now = Date.now()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0); // start of today, local time
+  d.setDate(d.getDate() + days);
+  return d.getTime();
 }
 
 // navigator.storage.persist() only *requests* persistence — it's a heuristic,
