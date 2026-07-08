@@ -681,6 +681,30 @@ p {
   transform: scaleX(1);
 }
 
+/* --- Home-screen language switcher --- */
+.lang-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.lang-btn {
+  appearance: none;
+  border: 2px solid transparent;
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 6px 14px;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.5;
+}
+
+.lang-btn.active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
 /* --- Settings screen --- */
 .settings-card {
   background: var(--card-bg);

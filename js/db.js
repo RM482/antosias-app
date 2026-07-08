@@ -193,24 +193,38 @@ export async function saveSettings(partial) {
 }
 
 // --- Standard game phrases (reusable carrier recordings) ----------------------
-// A few short clips in the parent's own voice, recorded once and stitched onto
-// each word's recording during the find-it game:
-//   clickOnDe / clickOnHet  →  "Klik op de …" / "Klik op het …"  (+ the word)
-//   correctionEen           →  "Nee, dit is een …"  (countable: een mandarijn)
-//   correction              →  "Nee, dit is …"      (mass nouns: brood, melk)
-// Each word picks the correct-form carrier via its `useEen` flag (see below).
-// Stored as Blobs in the existing meta store; absent clips simply mean the game
-// falls back to playing the bare word, so the feature no-ops until recorded.
-const STANDARD_PHRASE_KEYS = {
-  clickOnDe: 'phrase-clickon-de',
-  clickOnHet: 'phrase-clickon-het',
-  correctionEen: 'phrase-correction-een',
-  correction: 'phrase-correction',
+// Short carrier clips in the parent's own voice, recorded once and stitched
+// onto each word's recording during the find-it game. Stored as Blobs in the
+// meta store; an absent clip just means the game plays the bare word.
+//
+// The set differs by language. Dutch uses article-aware prompts and an
+// een/mass correction split. Polish has no articles and is case-inflected, so
+// the parent records two whole-phrase carriers whose wording works with the
+// bare (nominative) word — e.g. prompt "Gdzie jest …?", correction "To jest …".
+//
+// Dutch keys are the original unprefixed ones so previously recorded Dutch
+// clips keep working; other languages are prefixed.
+const PHRASE_SCHEMA = {
+  nl: {
+    clickOnDe: 'phrase-clickon-de',
+    clickOnHet: 'phrase-clickon-het',
+    correctionEen: 'phrase-correction-een',
+    correction: 'phrase-correction',
+  },
+  pl: {
+    prompt: 'phrase-pl-prompt',
+    correction: 'phrase-pl-correction',
+  },
 };
 
-export async function getStandardPhrases() {
+export function phraseNames(language) {
+  return Object.keys(PHRASE_SCHEMA[language] || {});
+}
+
+export async function getStandardPhrases(language = 'nl') {
+  const schema = PHRASE_SCHEMA[language] || {};
   const entries = await Promise.all(
-    Object.entries(STANDARD_PHRASE_KEYS).map(async ([name, key]) => {
+    Object.entries(schema).map(async ([name, key]) => {
       const rec = await get('meta', key);
       return [name, (rec && rec.value) || null];
     })
@@ -218,9 +232,9 @@ export async function getStandardPhrases() {
   return Object.fromEntries(entries);
 }
 
-export async function saveStandardPhrase(name, blob) {
-  const key = STANDARD_PHRASE_KEYS[name];
-  if (!key) throw new Error(`Unknown standard phrase: ${name}`);
+export async function saveStandardPhrase(language, name, blob) {
+  const key = (PHRASE_SCHEMA[language] || {})[name];
+  if (!key) throw new Error(`Unknown standard phrase: ${language}/${name}`);
   await put('meta', { key, value: blob });
 }
 
@@ -283,8 +297,38 @@ const SEED_DATA = {
       { categoryId: 'nl-cat-toys', article: 'de', word: 'auto', placeholderEmoji: '🚗' },
     ],
   },
-  pl: { categories: [], words: [] },
+  pl: {
+    // Polish has no de/het articles — words carry an empty article and display
+    // as just the word. Starter set mirrors the Dutch categories; audio is
+    // recorded by the parent later.
+    categories: [
+      { id: 'pl-cat-breakfast', name: 'Śniadanie', emoji: '🍳', order: 0 },
+      { id: 'pl-cat-clothes', name: 'Ubrania', emoji: '👕', order: 1 },
+      { id: 'pl-cat-toys', name: 'Zabawki', emoji: '🧸', order: 2 },
+    ],
+    words: [
+      { categoryId: 'pl-cat-breakfast', article: '', word: 'banan', placeholderEmoji: '🍌' },
+      { categoryId: 'pl-cat-breakfast', article: '', word: 'mleko', placeholderEmoji: '🥛' },
+      { categoryId: 'pl-cat-breakfast', article: '', word: 'chleb', placeholderEmoji: '🍞' },
+      { categoryId: 'pl-cat-breakfast', article: '', word: 'łyżka', placeholderEmoji: '🥄' },
+      { categoryId: 'pl-cat-breakfast', article: '', word: 'kubek', placeholderEmoji: '🥤' },
+      { categoryId: 'pl-cat-clothes', article: '', word: 'skarpetka', placeholderEmoji: '🧦' },
+      { categoryId: 'pl-cat-clothes', article: '', word: 'but', placeholderEmoji: '👟' },
+      { categoryId: 'pl-cat-clothes', article: '', word: 'kurtka', placeholderEmoji: '🧥' },
+      { categoryId: 'pl-cat-clothes', article: '', word: 'spodnie', placeholderEmoji: '👖' },
+      { categoryId: 'pl-cat-toys', article: '', word: 'piłka', placeholderEmoji: '⚽' },
+      { categoryId: 'pl-cat-toys', article: '', word: 'miś', placeholderEmoji: '🧸' },
+      { categoryId: 'pl-cat-toys', article: '', word: 'książka', placeholderEmoji: '📖' },
+      { categoryId: 'pl-cat-toys', article: '', word: 'samochód', placeholderEmoji: '🚗' },
+    ],
+  },
 };
+
+// Languages offered in the home-screen switcher (order = display order).
+export const LANGUAGES = [
+  { code: 'nl', flag: '🇳🇱', label: 'Dutch' },
+  { code: 'pl', flag: '🇵🇱', label: 'Polish' },
+];
 
 const SEED_VERSION = 1;
 const seedMarkerKey = (language) => `seed:${language}:v${SEED_VERSION}`;
@@ -326,7 +370,7 @@ export async function ensureSeeded(language = 'nl') {
       audioWord: null,
       audioPhrase: null,
       phraseText: '',
-      realWorldPrompt: `Find ${w.article} ${w.word}`,
+      realWorldPrompt: `Find ${[w.article, w.word].filter(Boolean).join(' ')}`,
       understandingStatus: 'not_introduced',
       speechStatus: 'none',
       excluded: false,

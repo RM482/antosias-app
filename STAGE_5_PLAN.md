@@ -1,6 +1,6 @@
 # Stage 5 — Polish + language switching (in progress)
 
-**Live app version:** cache-bust `?v=21` (bump on every deploy; see CLAUDE.md).
+**Live app version:** cache-bust `?v=22` (bump on every deploy; see CLAUDE.md).
 
 ## Where things stand (all deployed on `main`)
 
@@ -49,12 +49,35 @@ Let the parent switch between 🇳🇱 Dutch and 🇵🇱 Polish from the home s
 
 ### Build order (each step independently committable)
 
-1. [in progress] Home-screen language chooser + `settings.language` + filter categories/words by
-   active language + seed Polish starter content on first switch.
-2. Language-aware word editor (hide de/het + een for Polish; label text; `wordLabel` by language)
-   and language-aware `usesEen`/phrasing.
-3. Language-scoped standard phrases (2 carriers for Polish) + session phrasing per language.
-4. Polish seed word list (parent/native-speaker reviewed) + real audio.
+1. [DONE, code] Home-screen language chooser (🇳🇱/🇵🇱) + `settings.language` + filter
+   categories/words by active language + seed Polish starter content on first switch
+   (`switchLanguage` in admin.js; `LANGUAGES` + `SEED_DATA.pl` in db.js). New categories/words are
+   stamped with the active language.
+2. [DONE, code] Language-aware word editor: de/het picker and the "een" toggle are hidden for
+   Polish; the word-field label reads "{Language} word"; new Polish words default to no article.
+3. [DONE, code] Language-scoped standard phrases (`PHRASE_SCHEMA`; Dutch keeps its original
+   unprefixed keys so existing recordings survive; Polish uses `prompt` + `correction`). Session
+   phrasing branches by language (`promptCarrier`/`correctionCarrier` in session.js); distractors
+   stay within the session's language. Settings phrase recorders show the right clips per language.
+4. [TODO] Polish seed word list reviewed by a native speaker + real Polish audio recorded in-app.
+
+### ⏭️ RESUME HERE (next session)
+
+**Live app: `?v=22` (pushed, NOT yet tested on the iPhone).** Steps 1–3 above are written and
+syntax-checked but have only been reasoned through, not run on-device. First thing next session:
+
+1. Force-quit + reopen the installed app; confirm the **Dutch** side is unchanged (categories,
+   sessions, phrases all still work) — this is the safety check, since Stage-5 code touched the home
+   screen, word editor, and session/phrase code paths.
+2. Tap the **🇵🇱** flag on the home screen. Expect: Polish starter categories (Śniadanie/Ubrania/
+   Zabawki) appear, seeded once. Open a Polish word — the de/het picker and "een" toggle should be
+   gone, label reads "Polish word".
+3. In Settings (while 🇵🇱 active) record the two Polish carriers ("Gdzie jest …?", "To jest …"),
+   add a photo + audio to ≥2 Polish words, run a session, check the spoken prompt/correction.
+4. If all good, move to step 4 (real Polish content/audio). If anything's off, fix before continuing.
+
+Known nit deferred: a couple of word-editor strings are still Dutch-centric (Save validation says
+"Please enter the Dutch word"; the optional-phrase placeholder is Dutch) — harmless, tidy later.
 
 ### Safety notes
 

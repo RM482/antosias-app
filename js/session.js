@@ -9,9 +9,9 @@ import {
   usesEen,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=21';
-import { playBlobSequence, unlockAudio } from './media.js?v=21';
-import { el, shuffle, onTap } from './dom.js?v=21';
+} from './db.js?v=22';
+import { playBlobSequence, unlockAudio } from './media.js?v=22';
+import { el, shuffle, onTap } from './dom.js?v=22';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -83,13 +83,13 @@ export async function startSession(categoryId) {
   // Runs synchronously within the "Start" tap, so the audio context resumes
   // inside a user gesture (iOS requirement) before the first clip autoplays.
   unlockAudio();
-  const [category, allWords, phrases] = await Promise.all([
-    get('categories', categoryId),
-    getAll('words'),
-    getStandardPhrases(),
-  ]);
+  const [category, allWords] = await Promise.all([get('categories', categoryId), getAll('words')]);
+  const language = category?.language ?? 'nl';
+  const phrases = await getStandardPhrases(language);
   const eligibleInCategory = allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));
-  const allEligible = allWords.filter(isSessionEligible);
+  // Distractors stay within the same language so a Polish word can't appear in
+  // a Dutch session (and vice versa).
+  const allEligible = allWords.filter((w) => isSessionEligible(w) && (w.language ?? 'nl') === language);
 
   if (eligibleInCategory.length < 2) {
     alert(
@@ -106,8 +106,9 @@ export async function startSession(categoryId) {
 
   const state = {
     category,
+    language,
     steps,
-    phrases, // reusable carrier recordings: { clickOnDe, clickOnHet, correction }
+    phrases, // language-scoped carrier recordings (see getStandardPhrases)
     index: 0,
     stage: 'listen', // 'listen' | 'game' | 'prompt'
     observations: {}, // wordId -> { understood, said }
@@ -229,17 +230,28 @@ function renderListenStage(state) {
   playWord();
 }
 
-// Carrier clip that matches a word's article, or null (no article / not
-// recorded → the game just plays the bare word, as before).
-function promptCarrier(word, phrases) {
-  if (word.article === 'de') return phrases?.clickOnDe || null;
-  if (word.article === 'het') return phrases?.clickOnHet || null;
-  return null;
+// Carrier clip played before the target word ("Klik op de …"/"…het …" for
+// Dutch by article; a single "prompt" carrier for Polish). Null → the game
+// just plays the bare word.
+function promptCarrier(word, phrases, language) {
+  if (language === 'nl') {
+    if (word.article === 'de') return phrases?.clickOnDe || null;
+    if (word.article === 'het') return phrases?.clickOnHet || null;
+    return null;
+  }
+  return phrases?.prompt || null; // Polish (and any non-Dutch): one carrier
+}
+
+// Carrier for naming a wrongly-tapped word. Dutch picks een/mass by usesEen;
+// Polish uses its single correction carrier.
+function correctionCarrier(word, phrases, language) {
+  if (language === 'nl') return usesEen(word) ? phrases?.correctionEen : phrases?.correction;
+  return phrases?.correction || null;
 }
 
 function renderGameStage(state) {
   const { word, distractor } = state.steps[state.index];
-  const { phrases } = state;
+  const { phrases, language } = state;
   const screen = el('div', { class: 'session-screen game-stage' });
   screen.appendChild(el('div', { class: 'session-hint', text: `Find ${wordLabel(word)}` }));
 
@@ -251,14 +263,12 @@ function renderGameStage(state) {
   // through a single audio element, so a tiny seam between them is expected.
   function sayPrompt() {
     unlockAudio();
-    playBlobSequence([promptCarrier(word, phrases), word.audioWord].filter(Boolean)).catch(() => {});
+    playBlobSequence([promptCarrier(word, phrases, language), word.audioWord].filter(Boolean)).catch(() => {});
   }
-  // Names the wrong word she tapped, with Dutch-correct phrasing: countable
-  // words use the "een" carrier ("Nee, dit is een mandarijn"), mass nouns use
-  // the plain one ("Nee, dit is brood"). useEen defaults on, so only mass
-  // nouns need turning off. Speaks only if the matching clip was recorded.
+  // Names the wrong word she tapped ("Nee, dit is een mandarijn" / "…brood" for
+  // Dutch; "To jest …" for Polish). Speaks only if the matching clip exists.
   function sayCorrection(wrongWord) {
-    const carrier = usesEen(wrongWord) ? phrases?.correctionEen : phrases?.correction;
+    const carrier = correctionCarrier(wrongWord, phrases, language);
     if (!carrier) return;
     unlockAudio();
     playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});

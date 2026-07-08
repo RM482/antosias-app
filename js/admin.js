@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=21';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=21';
-import { startSession, initSession } from './session.js?v=21';
-import { el } from './dom.js?v=21';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=21';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=22';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=22';
+import { startSession, initSession } from './session.js?v=22';
+import { el } from './dom.js?v=22';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=22';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -191,9 +191,25 @@ function buildAudioControl(container, { title, maxMs, getBlob, setBlob, required
 
 // --- Screens -----------------------------------------------------
 
+async function switchLanguage(lang) {
+  await saveSettings({ language: lang });
+  await ensureSeeded(lang); // seed that language's starter set the first time it's chosen
+  render();
+}
+
 async function renderCategories() {
-  const [categories, words] = await Promise.all([getAll('categories'), getAll('words')]);
-  categories.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const [allCategories, allWords, settings] = await Promise.all([
+    getAll('categories'),
+    getAll('words'),
+    getSettings(),
+  ]);
+  const lang = settings.language || 'nl';
+  // Only show the active language's content (old records without a language
+  // field read as Dutch, so nothing pre-existing disappears).
+  const categories = allCategories
+    .filter((c) => (c.language ?? 'nl') === lang)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const words = allWords.filter((w) => (w.language ?? 'nl') === lang);
 
   appEl.appendChild(
     topbar({
@@ -204,6 +220,24 @@ async function renderCategories() {
   );
 
   const screen = el('div', { class: 'screen' });
+
+  // Language switcher (flags). Tapping a flag stores the choice, seeds that
+  // language's starter words the first time, and re-renders everything for it.
+  const langSwitch = el('div', { class: 'lang-switch' });
+  for (const l of LANGUAGES) {
+    const btn = el('button', {
+      type: 'button',
+      class: `lang-btn${l.code === lang ? ' active' : ''}`,
+      text: l.flag,
+      'aria-label': l.label,
+      title: l.label,
+      onclick: () => {
+        if (l.code !== lang) switchLanguage(l.code);
+      },
+    });
+    langSwitch.appendChild(btn);
+  }
+  screen.appendChild(langSwitch);
 
   if (categories.length === 0) {
     screen.appendChild(
@@ -399,12 +433,13 @@ async function renderCategoryEdit({ categoryId }) {
           return;
         }
         if (isNew) {
-          const allCats = await getAll('categories');
+          const [allCats, settings] = await Promise.all([getAll('categories'), getSettings()]);
           const maxOrder = allCats.reduce((m, c) => Math.max(m, c.order ?? 0), -1);
           await put('categories', {
             id: newId(),
             name: draft.name.trim(),
             emoji: draft.emoji.trim() || '🙂',
+            language: settings.language || 'nl', // new category belongs to the active language
             order: maxOrder + 1,
             createdAt: Date.now(),
           });
@@ -543,11 +578,20 @@ async function renderWords({ categoryId }) {
 
 async function renderWordEdit({ categoryId, wordId }) {
   const isNew = !wordId;
-  const existing = isNew ? null : await get('words', wordId);
+  const [existing, category] = await Promise.all([
+    isNew ? null : get('words', wordId),
+    get('categories', categoryId),
+  ]);
   if (!isNew && !existing) {
     pop();
     return;
   }
+
+  // A word belongs to its category's language. Dutch shows the de/het article
+  // picker and the "een" toggle; Polish (no articles) hides both.
+  const wordLang = existing ? existing.language ?? 'nl' : category?.language ?? 'nl';
+  const isDutch = wordLang === 'nl';
+  const langLabel = (LANGUAGES.find((l) => l.code === wordLang) || {}).label || 'Word';
 
   const now = Date.now();
   const draft = existing
@@ -555,8 +599,8 @@ async function renderWordEdit({ categoryId, wordId }) {
     : {
         id: newId(),
         categoryId,
-        language: 'nl',
-        article: 'de',
+        language: wordLang,
+        article: isDutch ? 'de' : '',
         word: '',
         photo: null,
         placeholderEmoji: '🔤',
@@ -566,7 +610,7 @@ async function renderWordEdit({ categoryId, wordId }) {
         realWorldPrompt: '',
         understandingStatus: 'not_introduced',
         speechStatus: 'none',
-        useEen: true, // countable by default; turn off for mass nouns (brood, melk)
+        useEen: true, // Dutch only; countable by default (turn off for mass nouns)
         excluded: false,
         srsLevel: 0,
         nextReviewDate: null,
@@ -582,54 +626,57 @@ async function renderWordEdit({ categoryId, wordId }) {
   );
   const screen = el('div', { class: 'screen' });
 
-  buildSegmented(screen, {
-    label: 'Article',
-    options: [
-      { label: 'de', value: 'de' },
-      { label: 'het', value: 'het' },
-      { label: '(none)', value: '' },
-    ],
-    value: draft.article,
-    onChange: (v) => {
-      draft.article = v;
-      labelPreview.textContent = wordLabel(draft) || ' ';
-    },
-  });
+  // Dutch-only grammar controls: the de/het article picker and the "een"
+  // correction toggle. Polish has neither, so they're omitted for Polish words.
+  let eenSeg = null;
+  let eenTouched = false;
+  if (isDutch) {
+    buildSegmented(screen, {
+      label: 'Article',
+      options: [
+        { label: 'de', value: 'de' },
+        { label: 'het', value: 'het' },
+        { label: '(none)', value: '' },
+      ],
+      value: draft.article,
+      onChange: (v) => {
+        draft.article = v;
+        labelPreview.textContent = wordLabel(draft) || ' ';
+      },
+    });
 
-  // Controls the wrong-answer correction phrasing in the game:
-  // “een” → "Nee, dit is een mandarijn" (countable); “no een” → "Nee, dit is
-  // brood" (mass nouns like bread/milk). Only affects that spoken correction.
-  //
-  // The default is auto-guessed from the word (common mass nouns → no "een").
-  // We keep auto-guessing as the parent types UNTIL they set it by hand; a
-  // word that already had an explicit choice saved is left as-is.
-  const eenExplicit = existing && typeof existing.useEen === 'boolean';
-  let eenTouched = !!eenExplicit;
-  draft.useEen = usesEen(draft); // explicit saved value, else the guess (same as the game)
-  const eenSeg = buildSegmented(screen, {
-    label: 'Naming it (“dit is …”)',
-    options: [
-      { label: 'een …', value: 'een' },
-      { label: 'no “een”', value: 'none' },
-    ],
-    value: draft.useEen ? 'een' : 'none',
-    onChange: (v) => {
-      draft.useEen = v === 'een';
-      eenTouched = true; // stop auto-guessing once the parent decides
-    },
-  });
+    // Correction phrasing in the game: “een” → "Nee, dit is een mandarijn"
+    // (countable); “no een” → "Nee, dit is brood" (mass nouns). Auto-guessed
+    // from the word until the parent sets it by hand; an explicit saved choice
+    // is kept.
+    const eenExplicit = existing && typeof existing.useEen === 'boolean';
+    eenTouched = !!eenExplicit;
+    draft.useEen = usesEen(draft); // explicit saved value, else the guess (same as the game)
+    eenSeg = buildSegmented(screen, {
+      label: 'Naming it (“dit is …”)',
+      options: [
+        { label: 'een …', value: 'een' },
+        { label: 'no “een”', value: 'none' },
+      ],
+      value: draft.useEen ? 'een' : 'none',
+      onChange: (v) => {
+        draft.useEen = v === 'een';
+        eenTouched = true; // stop auto-guessing once the parent decides
+      },
+    });
+  }
 
   screen.appendChild(
     el('div', { class: 'field' }, [
-      el('label', { text: 'Dutch word' }),
+      el('label', { text: `${langLabel} word` }),
       el('input', {
         type: 'text',
         value: draft.word,
-        placeholder: 'e.g. banaan',
+        placeholder: isDutch ? 'e.g. banaan' : 'e.g. banan',
         oninput: (e) => {
           draft.word = e.target.value;
           labelPreview.textContent = wordLabel(draft) || ' ';
-          if (!eenTouched) {
+          if (isDutch && eenSeg && !eenTouched) {
             draft.useEen = guessUsesEen(draft.word);
             eenSeg.setValue(draft.useEen ? 'een' : 'none');
           }
@@ -772,11 +819,10 @@ async function renderSettings() {
   appEl.appendChild(topbar({ title: 'Settings', onBack: () => pop() }));
   const screen = el('div', { class: 'screen' });
 
-  const [settings, storage, phrases] = await Promise.all([
-    getSettings(),
-    getStorageStatus(),
-    getStandardPhrases(),
-  ]);
+  const [settings, storage] = await Promise.all([getSettings(), getStorageStatus()]);
+  const lang = settings.language || 'nl';
+  const langLabel = (LANGUAGES.find((l) => l.code === lang) || {}).label || '';
+  const phrases = await getStandardPhrases(lang);
 
   // --- Backup reminder ---
   const last = settings.lastBackupAt;
@@ -833,22 +879,34 @@ async function renderSettings() {
   screen.appendChild(card('Storage', storageChildren));
 
   // --- Standard game phrases (recorded once, reused for every word) ---
+  // The clips needed differ by language: Dutch has article-aware prompts and
+  // an een/mass correction split; Polish uses two whole-phrase carriers whose
+  // wording works with the bare (nominative) word.
+  const PHRASE_SPECS = {
+    nl: {
+      intro:
+        'Record these short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Trail off naturally, as if the word comes next. Leave them blank to just hear the word on its own.',
+      specs: [
+        { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
+        { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
+        { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
+        { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
+      ],
+    },
+    pl: {
+      intro:
+        'Record these two short clips in your own voice. The app plays them before the word during the find-it game. Choose wording that fits the plain (nominative) word — e.g. “Gdzie jest …?” and “To jest …” — and trail off naturally. Leave them blank to just hear the word on its own.',
+      specs: [
+        { name: 'prompt', title: 'Prompt — say something like: “Gdzie jest …?” (where is …?)' },
+        { name: 'correction', title: 'Correction on a wrong tap — say: “To jest …” (this is …)' },
+      ],
+    },
+  };
+  const phraseConfig = PHRASE_SPECS[lang] || PHRASE_SPECS.nl;
   const phraseDraft = { ...phrases };
   const phraseBox = el('div', {});
-  phraseBox.appendChild(
-    el('p', {
-      class: 'settings-note',
-      text:
-        'Record these short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Trail off naturally, as if the word comes next. Leave them blank to just hear the word on its own.',
-    })
-  );
-  const phraseSpecs = [
-    { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
-    { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
-    { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
-    { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
-  ];
-  for (const spec of phraseSpecs) {
+  phraseBox.appendChild(el('p', { class: 'settings-note', text: phraseConfig.intro }));
+  for (const spec of phraseConfig.specs) {
     buildAudioControl(phraseBox, {
       title: spec.title,
       maxMs: 5000,
@@ -865,8 +923,8 @@ async function renderSettings() {
       btn.disabled = true;
       btn.textContent = 'Saving…';
       try {
-        for (const spec of phraseSpecs) {
-          if (phraseDraft[spec.name]) await saveStandardPhrase(spec.name, phraseDraft[spec.name]);
+        for (const spec of phraseConfig.specs) {
+          if (phraseDraft[spec.name]) await saveStandardPhrase(lang, spec.name, phraseDraft[spec.name]);
         }
         alert('Saved. These phrases will play during the find-it game.');
       } catch (err) {
@@ -878,7 +936,7 @@ async function renderSettings() {
     },
   });
   phraseBox.appendChild(savePhrasesBtn);
-  screen.appendChild(card('🔊 Standard game phrases', [phraseBox]));
+  screen.appendChild(card(`🔊 Standard game phrases${langLabel ? ` — ${langLabel}` : ''}`, [phraseBox]));
 
   // --- Guided Access instructions ---
   const steps = [
