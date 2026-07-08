@@ -45,6 +45,34 @@ export function pickSupportedMimeType() {
  * for { blob, mimeType, durationMs }. Always releases the mic track,
  * whether stopped, cancelled, or auto-capped.
  */
+// The microphone stream is acquired once and kept open, so recording several
+// words in a row only triggers iOS's permission prompt once (per app launch)
+// instead of on every single recording. It's released when the app is
+// backgrounded/closed (see the listeners below), which also clears the "mic
+// in use" indicator; the next visit asks once more.
+let micStream = null;
+async function getMicStream() {
+  if (micStream && micStream.active && micStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+    return micStream;
+  }
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  return micStream;
+}
+
+export function releaseMicrophone() {
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') releaseMicrophone();
+  });
+  window.addEventListener('pagehide', releaseMicrophone);
+}
+
 export async function recordAudio({ maxMs = 6000 } = {}) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error('This browser has no microphone API available.');
@@ -52,7 +80,7 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
 
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await getMicStream();
   } catch (err) {
     throw new Error('Microphone permission was denied, or no microphone is available.');
   }
@@ -61,7 +89,8 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
   const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   const chunks = [];
   const startedAt = Date.now();
-  const stopAllTracks = () => stream.getTracks().forEach((track) => track.stop());
+  // Note: we intentionally do NOT stop the stream's tracks here — the stream is
+  // reused across recordings and only released on background/close.
 
   recorder.addEventListener('dataavailable', (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data);
@@ -69,7 +98,6 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
 
   const result = new Promise((resolve) => {
     recorder.addEventListener('stop', () => {
-      stopAllTracks();
       const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
       resolve({ blob, mimeType: blob.type, durationMs: Date.now() - startedAt });
     });
@@ -88,7 +116,6 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
     cancel() {
       clearTimeout(capTimer);
       if (recorder.state !== 'inactive') recorder.stop();
-      stopAllTracks();
     },
     result,
   };
@@ -107,8 +134,22 @@ function getSharedAudioElement() {
   return sharedAudio;
 }
 
+// A single Web Audio context, used to play clip sequences gaplessly (see
+// playBlobSequence). Created lazily; starts suspended on iOS until resumed
+// inside a user gesture — unlockAudio() does that.
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audioCtx = new Ctx();
+  }
+  return audioCtx;
+}
+
 // Call once, directly inside a user-gesture (tap) handler, before any
 // programmatic (non-gesture) playback is attempted later in the session.
+// Unlocks both the shared <audio> element (single-clip preview) and the
+// Web Audio context (gapless sequences).
 export function unlockAudio() {
   const audio = getSharedAudioElement();
   audio.muted = true;
@@ -116,6 +157,9 @@ export function unlockAudio() {
   if (p && p.catch) p.catch(() => {});
   audio.pause();
   audio.muted = false;
+
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
 }
 
 export function playBlob(blob) {
@@ -126,13 +170,80 @@ export function playBlob(blob) {
   return audio.play();
 }
 
-// Plays blobs one after another on the shared element (e.g. word audio then
-// phrase audio). Falsy entries are skipped. Resolves once the last one ends.
-export function playBlobSequence(blobs) {
-  const queue = blobs.filter(Boolean);
-  if (queue.length === 0) return Promise.resolve();
-  const audio = getSharedAudioElement();
+// Decoded audio, cached per Blob so replaying a clip (or reusing a carrier
+// phrase across many words) doesn't re-decode. WeakMap so it's freed with the
+// Blob.
+const decodedCache = new WeakMap();
+async function decodeBlob(ctx, blob) {
+  const cached = decodedCache.get(blob);
+  if (cached) return cached;
+  const arrayBuffer = await blob.arrayBuffer();
+  // Safari historically only supports the callback form of decodeAudioData.
+  const buffer = await new Promise((resolve, reject) => {
+    const p = ctx.decodeAudioData(arrayBuffer, resolve, reject);
+    if (p && p.then) p.then(resolve, reject);
+  });
+  decodedCache.set(blob, buffer);
+  return buffer;
+}
 
+// Find the speech span within a clip by trimming leading/trailing near-silence,
+// keeping a small guard margin so we don't clip the very edges of the sound.
+// Returns { offset, duration } in seconds for AudioBufferSourceNode.start().
+function speechSpan(buffer, threshold = 0.02, guardSec = 0.03) {
+  const data = buffer.getChannelData(0);
+  const n = data.length;
+  let start = 0;
+  while (start < n && Math.abs(data[start]) < threshold) start++;
+  let end = n;
+  while (end > start && Math.abs(data[end - 1]) < threshold) end--;
+  if (start >= end) return { offset: 0, duration: buffer.duration }; // silent → play whole
+  const guard = Math.floor(guardSec * buffer.sampleRate);
+  start = Math.max(0, start - guard);
+  end = Math.min(n, end + guard);
+  return { offset: start / buffer.sampleRate, duration: (end - start) / buffer.sampleRate };
+}
+
+// Plays blobs one after another (e.g. "Klik op de" then "banaan"). Uses the
+// Web Audio API to schedule the clips back-to-back with sample-accurate timing
+// and trimmed silence, so there's no reload gap between them. Falls back to the
+// simple <audio> element player if Web Audio or decoding isn't available.
+// Falsy entries are skipped. Resolves once the last clip ends.
+export async function playBlobSequence(blobs) {
+  const queue = blobs.filter(Boolean);
+  if (queue.length === 0) return;
+
+  const ctx = getAudioContext();
+  if (ctx) {
+    try {
+      if (ctx.state === 'suspended') await ctx.resume();
+      const buffers = await Promise.all(queue.map((b) => decodeBlob(ctx, b)));
+      let when = ctx.currentTime + 0.03; // tiny lead-in so scheduling is reliable
+      let last = null;
+      for (const buffer of buffers) {
+        const { offset, duration } = speechSpan(buffer);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        src.start(when, offset, duration);
+        when += duration; // next clip begins exactly as this one's speech ends
+        last = src;
+      }
+      return await new Promise((resolve) => {
+        if (last) last.onended = () => resolve();
+        else resolve();
+      });
+    } catch {
+      // Fall through to the element-based player below.
+    }
+  }
+  return playBlobSequenceViaElement(queue);
+}
+
+// Fallback: sequential playback on the shared <audio> element (has an audible
+// gap between clips, but always works).
+function playBlobSequenceViaElement(queue) {
+  const audio = getSharedAudioElement();
   return new Promise((resolve, reject) => {
     let i = 0;
     function playNext() {

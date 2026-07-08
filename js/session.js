@@ -8,9 +8,9 @@ import {
   getStandardPhrases,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=19';
-import { playBlobSequence, unlockAudio } from './media.js?v=19';
-import { el, shuffle, onTap } from './dom.js?v=19';
+} from './db.js?v=20';
+import { playBlobSequence, unlockAudio } from './media.js?v=20';
+import { el, shuffle, onTap } from './dom.js?v=20';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -79,6 +79,9 @@ function pickDistractor(target, sameCategoryPool, allEligiblePool) {
 }
 
 export async function startSession(categoryId) {
+  // Runs synchronously within the "Start" tap, so the audio context resumes
+  // inside a user gesture (iOS requirement) before the first clip autoplays.
+  unlockAudio();
   const [category, allWords, phrases] = await Promise.all([
     get('categories', categoryId),
     getAll('words'),
