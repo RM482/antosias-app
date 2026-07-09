@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=24';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=24';
-import { startSession, initSession } from './session.js?v=24';
-import { el } from './dom.js?v=24';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=24';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=25';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=25';
+import { startSession, initSession } from './session.js?v=25';
+import { el } from './dom.js?v=25';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=25';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -578,9 +578,10 @@ async function renderWords({ categoryId }) {
 
 async function renderWordEdit({ categoryId, wordId }) {
   const isNew = !wordId;
-  const [existing, category] = await Promise.all([
+  const [existing, category, allWords] = await Promise.all([
     isNew ? null : get('words', wordId),
     get('categories', categoryId),
+    getAll('words'),
   ]);
   if (!isNew && !existing) {
     pop();
@@ -591,7 +592,9 @@ async function renderWordEdit({ categoryId, wordId }) {
   // picker and the "een" toggle; Polish (no articles) hides both.
   const wordLang = existing ? existing.language ?? 'nl' : category?.language ?? 'nl';
   const isDutch = wordLang === 'nl';
+  const otherLang = isDutch ? 'pl' : 'nl';
   const langLabel = (LANGUAGES.find((l) => l.code === wordLang) || {}).label || 'Word';
+  const otherLangLabel = (LANGUAGES.find((l) => l.code === otherLang) || {}).label || 'Word';
 
   const now = Date.now();
   const draft = existing
@@ -628,6 +631,58 @@ async function renderWordEdit({ categoryId, wordId }) {
       if (photoRecord) draft.photo = photoRecord.blob;
     } catch {
       // Ignore errors; photo just won't display
+    }
+  }
+
+  // Find paired word in other language (if this word has a photo)
+  let pairedWord = null;
+  let pairedCategory = null;
+  if (draft.photoId || draft.photo) {
+    const sharedPhotoId = draft.photoId;
+    const candidates = allWords.filter(
+      (w) => (w.language ?? 'nl') === otherLang && w.photoId === sharedPhotoId
+    );
+    if (candidates.length > 0) {
+      pairedWord = candidates[0]; // Use first match (typically only one per photo)
+    }
+  }
+
+  // Create paired draft with defaults
+  const pairedDraft = pairedWord
+    ? { ...pairedWord }
+    : {
+        id: newId(),
+        categoryId: category?.id, // Will be set to paired category if needed
+        language: otherLang,
+        article: '',
+        word: '',
+        photo: null,
+        photoId: draft.photoId, // Share the photo with the main word
+        placeholderEmoji: '🔤',
+        audioWord: null,
+        audioPhrase: null,
+        phraseText: '',
+        realWorldPrompt: '',
+        understandingStatus: 'not_introduced',
+        speechStatus: 'none',
+        useEen: false,
+        excluded: false,
+        srsLevel: 0,
+        nextReviewDate: null,
+        dateIntroduced: null,
+        lastPracticed: null,
+        timesPracticed: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+  // Load photo for paired word if it has photoId
+  if (pairedDraft.photoId && !pairedDraft.photo) {
+    try {
+      const photoRecord = await getPhoto(pairedDraft.photoId);
+      if (photoRecord) pairedDraft.photo = photoRecord.blob;
+    } catch {
+      // Ignore errors
     }
   }
 
@@ -740,6 +795,67 @@ async function renderWordEdit({ categoryId, wordId }) {
     required: false,
   });
 
+  // --- Paired language section ---
+  screen.appendChild(
+    el('div', { style: 'margin: 20px 0; padding-top: 20px; border-top: 1px solid #ddd;' }, [
+      el('h2', { style: 'font-size: 16px; margin: 0 0 12px 0;', text: `Also in ${otherLangLabel}` }),
+    ])
+  );
+
+  screen.appendChild(
+    el('div', { class: 'field' }, [
+      el('label', { text: `${otherLangLabel} word` }),
+      el('input', {
+        type: 'text',
+        value: pairedDraft.word,
+        placeholder: otherLang === 'pl' ? 'e.g. banan' : 'e.g. banaan',
+        oninput: (e) => {
+          pairedDraft.word = e.target.value;
+        },
+      }),
+    ])
+  );
+
+  screen.appendChild(
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Optional short phrase (text)' }),
+      el('input', {
+        type: 'text',
+        value: pairedDraft.phraseText,
+        placeholder: otherLang === 'pl' ? 'e.g. To jest banan' : 'e.g. Dit is een banaan',
+        oninput: (e) => (pairedDraft.phraseText = e.target.value),
+      }),
+    ])
+  );
+
+  screen.appendChild(
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Real-world prompt for the parent' }),
+      el('input', {
+        type: 'text',
+        value: pairedDraft.realWorldPrompt,
+        placeholder: otherLang === 'pl' ? 'e.g. Daj Papie bananę' : 'e.g. Give Papa de banaan',
+        oninput: (e) => (pairedDraft.realWorldPrompt = e.target.value),
+      }),
+    ])
+  );
+
+  buildAudioControl(screen, {
+    title: `${otherLangLabel} word audio (say just the word)`,
+    maxMs: 6000,
+    getBlob: () => pairedDraft.audioWord,
+    setBlob: (b) => (pairedDraft.audioWord = b),
+    required: false, // Optional initially, can record later
+  });
+
+  buildAudioControl(screen, {
+    title: `${otherLangLabel} phrase audio (optional)`,
+    maxMs: 15000,
+    getBlob: () => pairedDraft.audioPhrase,
+    setBlob: (b) => (pairedDraft.audioPhrase = b),
+    required: false,
+  });
+
   buildSegmented(screen, {
     label: 'Understanding',
     options: [
@@ -784,12 +900,36 @@ async function renderWordEdit({ categoryId, wordId }) {
       text: 'Save',
       onclick: async () => {
         if (!draft.word.trim()) {
-          alert('Please enter the Dutch word.');
+          alert(`Please enter the ${langLabel} word.`);
           return;
         }
         draft.word = draft.word.trim();
         draft.updatedAt = Date.now();
+
+        // If paired word has any content, save it too (with shared photo)
+        if (pairedDraft.word.trim()) {
+          pairedDraft.word = pairedDraft.word.trim();
+          pairedDraft.updatedAt = Date.now();
+          pairedDraft.photoId = draft.photoId; // Ensure they share the photo
+          // Find or create the paired category
+          const pairedCatName = category?.name;
+          let pairedCat = pairedWord?.categoryId
+            ? allWords.find((w) => w.id === pairedWord.categoryId)?.categoryId
+            : null;
+          if (!pairedCat && pairedCatName) {
+            const matchedPairedCat = (await getAll('categories')).find(
+              (c) => (c.language ?? 'nl') === otherLang && c.name === pairedCatName
+            );
+            pairedDraft.categoryId = matchedPairedCat?.id || category?.id; // Fallback to same category ID
+          }
+        }
+
+        // Save main word with photo migration
         await saveWord(draft);
+        // Save paired word if it has content
+        if (pairedDraft.word.trim()) {
+          await saveWord(pairedDraft);
+        }
         pop();
       },
     })
