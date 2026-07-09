@@ -9,9 +9,9 @@ import {
   usesEen,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=22';
-import { playBlobSequence, unlockAudio } from './media.js?v=22';
-import { el, shuffle, onTap } from './dom.js?v=22';
+} from './db.js?v=23';
+import { playBlobSequence, unlockAudio } from './media.js?v=23';
+import { el, shuffle, onTap } from './dom.js?v=23';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -204,12 +204,17 @@ function renderListenStage(state) {
   screen.appendChild(el('div', { class: 'session-label', text: wordLabel(word) }));
   screen.appendChild(el('div', { class: 'session-hint', text: 'Tap the picture to hear it' }));
 
+  let isPlaying = false;
   async function playWord() {
+    if (isPlaying) return; // prevent overlapping playback
+    isPlaying = true;
     unlockAudio();
     try {
       await playBlobSequence([word.audioWord, word.audioPhrase]);
     } catch {
       // Ignore playback errors from rapid repeated taps.
+    } finally {
+      isPlaying = false;
     }
   }
   onTap(photoBtn, playWord);
@@ -267,21 +272,29 @@ function renderGameStage(state) {
   }
   // Names the wrong word she tapped ("Nee, dit is een mandarijn" / "…brood" for
   // Dutch; "To jest …" for Polish). Speaks only if the matching clip exists.
-  function sayCorrection(wrongWord) {
+  // Returns a promise that resolves when playback completes.
+  async function sayCorrection(wrongWord) {
     const carrier = correctionCarrier(wrongWord, phrases, language);
     if (!carrier) return;
     unlockAudio();
-    playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});
+    return playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});
   }
 
   let answered = false;
+  function playCorrectFeedback() {
+    const goed = phrases?.goed;
+    if (!goed) return;
+    unlockAudio();
+    playBlobSequence([goed]).catch(() => {});
+  }
   for (const opt of options) {
     const btn = el('button', { type: 'button', class: 'session-option' });
     btn.appendChild(wordVisual(opt, 'session-option-photo'));
-    onTap(btn, () => {
+    onTap(btn, async () => {
       if (answered) return;
       if (opt.id === word.id) {
         answered = true;
+        playCorrectFeedback();
         btn.classList.add('correct');
         setTimeout(() => {
           state.stage = 'prompt';
@@ -290,7 +303,9 @@ function renderGameStage(state) {
       } else {
         btn.classList.add('wiggle');
         setTimeout(() => btn.classList.remove('wiggle'), 500);
-        sayCorrection(opt);
+        await sayCorrection(opt);
+        // After correction, re-ask the prompt so she gets another chance
+        sayPrompt();
       }
     });
     optionsWrap.appendChild(btn);

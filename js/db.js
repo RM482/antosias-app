@@ -210,10 +210,12 @@ const PHRASE_SCHEMA = {
     clickOnHet: 'phrase-clickon-het',
     correctionEen: 'phrase-correction-een',
     correction: 'phrase-correction',
+    goed: 'phrase-goed-zo',
   },
   pl: {
     prompt: 'phrase-pl-prompt',
     correction: 'phrase-pl-correction',
+    goed: 'phrase-pl-goed',
   },
 };
 

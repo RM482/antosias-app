@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=22';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=22';
-import { startSession, initSession } from './session.js?v=22';
-import { el } from './dom.js?v=22';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=22';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=23';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=23';
+import { startSession, initSession } from './session.js?v=23';
+import { el } from './dom.js?v=23';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=23';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -891,14 +891,16 @@ async function renderSettings() {
         { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
         { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
         { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
+        { name: 'goed', title: 'Feedback when she gets it right — say: “Goed zo!” (well done!)' },
       ],
     },
     pl: {
       intro:
-        'Record these two short clips in your own voice. The app plays them before the word during the find-it game. Choose wording that fits the plain (nominative) word — e.g. “Gdzie jest …?” and “To jest …” — and trail off naturally. Leave them blank to just hear the word on its own.',
+        'Record these short clips in your own voice. The app plays them before the word during the find-it game. Choose wording that fits the plain (nominative) word — e.g. “Gdzie jest …?” and “To jest …” — and trail off naturally. Leave them blank to just hear the word on its own.',
       specs: [
         { name: 'prompt', title: 'Prompt — say something like: “Gdzie jest …?” (where is …?)' },
         { name: 'correction', title: 'Correction on a wrong tap — say: “To jest …” (this is …)' },
+        { name: 'goed', title: 'Feedback when she gets it right — say: “Świetnie!” (well done!)' },
       ],
     },
   };
