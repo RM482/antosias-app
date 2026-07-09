@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=26';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=26';
-import { startSession, initSession } from './session.js?v=26';
-import { el } from './dom.js?v=26';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=26';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos } from './db.js?v=27';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=27';
+import { startSession, initSession } from './session.js?v=27';
+import { el } from './dom.js?v=27';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=27';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -482,6 +482,9 @@ async function renderWords({ categoryId }) {
     return;
   }
   const words = allWords.filter((w) => w.categoryId === categoryId);
+  // Words that keep their photo in the photos store need the blob loaded
+  // before the list can show thumbnails.
+  await attachPhotos(words);
 
   appEl.appendChild(
     topbar({
@@ -576,6 +579,53 @@ async function renderWords({ categoryId }) {
   appEl.appendChild(screen);
 }
 
+// Find the other-language category that mirrors this one, creating it if
+// needed. Matching by name alone fails for the seeded pairs ("Breakfast" vs
+// "Śniadanie"), so: (1) follow a previously stored pairedCategoryId link,
+// (2) match seeded ids by their shared suffix (…cat-breakfast ↔
+// pl-cat-breakfast), (3) match by identical name, (4) create a counterpart
+// with the same name/emoji. The resolved pair is linked both ways so later
+// renames can't break it.
+async function findOrCreatePairedCategory(category, otherLang) {
+  const cats = await getAll('categories');
+  const inOtherLang = (c) => c && (c.language ?? 'nl') === otherLang;
+
+  let match = null;
+  if (category.pairedCategoryId) {
+    const linked = cats.find((c) => c.id === category.pairedCategoryId);
+    if (inOtherLang(linked)) match = linked;
+  }
+  if (!match) {
+    const seedSuffix = /(?:^|-)cat-(.+)$/.exec(category.id || '');
+    if (seedSuffix) {
+      match = cats.find((c) => c.id === `${otherLang}-cat-${seedSuffix[1]}` && inOtherLang(c)) || null;
+    }
+  }
+  if (!match) {
+    const name = (category.name || '').trim().toLowerCase();
+    match = cats.find((c) => inOtherLang(c) && (c.name || '').trim().toLowerCase() === name) || null;
+  }
+  if (!match) {
+    match = {
+      id: newId(),
+      name: category.name,
+      emoji: category.emoji,
+      order: category.order ?? 0,
+      language: otherLang,
+    };
+    await put('categories', match);
+  }
+  if (category.pairedCategoryId !== match.id) {
+    category.pairedCategoryId = match.id;
+    await put('categories', category);
+  }
+  if (match.pairedCategoryId !== category.id) {
+    match.pairedCategoryId = category.id;
+    await put('categories', match);
+  }
+  return match;
+}
+
 async function renderWordEdit({ categoryId, wordId }) {
   const isNew = !wordId;
   const [existing, category, allWords] = await Promise.all([
@@ -624,41 +674,31 @@ async function renderWordEdit({ categoryId, wordId }) {
         updatedAt: now,
       };
 
-  // Load photo from photos store if this word has a photoId (new format)
-  if (draft.photoId) {
-    try {
-      const photoRecord = await getPhoto(draft.photoId);
-      if (photoRecord) draft.photo = photoRecord.blob;
-    } catch {
-      // Ignore errors; photo just won't display
-    }
-  }
+  // Load the photo blob for display if this word keeps its photo in the
+  // photos store (new format).
+  await attachPhotos([draft]);
 
-  // Find paired word in other language (if this word has a photo)
-  let pairedWord = null;
-  let pairedCategory = null;
-  if (draft.photoId || draft.photo) {
-    const sharedPhotoId = draft.photoId;
-    const candidates = allWords.filter(
-      (w) => (w.language ?? 'nl') === otherLang && w.photoId === sharedPhotoId
-    );
-    if (candidates.length > 0) {
-      pairedWord = candidates[0]; // Use first match (typically only one per photo)
-    }
-  }
+  // The paired word is the other-language word sharing this word's photo.
+  // Only a real photoId links words — matching on a missing id would pair
+  // this word with any other-language word that also has no photo.
+  const pairedWord = draft.photoId
+    ? allWords.find((w) => (w.language ?? 'nl') === otherLang && w.photoId === draft.photoId) || null
+    : null;
 
-  // Create paired draft with defaults
-  const pairedDraft = pairedWord
+  // Draft for the other-language version, edited in the section below the
+  // main word's fields. Category is resolved at save time (see the Save
+  // handler) so a new paired word always lands on its own language's side.
+  let pairedDraft = pairedWord
     ? { ...pairedWord }
     : {
         id: newId(),
-        categoryId: category?.id, // Will be set to paired category if needed
+        categoryId: null,
         language: otherLang,
         article: '',
         word: '',
         photo: null,
-        photoId: draft.photoId, // Share the photo with the main word
-        placeholderEmoji: '🔤',
+        photoId: null,
+        placeholderEmoji: draft.placeholderEmoji || '🔤',
         audioWord: null,
         audioPhrase: null,
         phraseText: '',
@@ -675,16 +715,6 @@ async function renderWordEdit({ categoryId, wordId }) {
         createdAt: now,
         updatedAt: now,
       };
-
-  // Load photo for paired word if it has photoId
-  if (pairedDraft.photoId && !pairedDraft.photo) {
-    try {
-      const photoRecord = await getPhoto(pairedDraft.photoId);
-      if (photoRecord) pairedDraft.photo = photoRecord.blob;
-    } catch {
-      // Ignore errors
-    }
-  }
 
   appEl.appendChild(
     topbar({ title: isNew ? 'New word' : wordLabel(draft) || 'Edit word', onBack: () => pop() })
@@ -906,28 +936,44 @@ async function renderWordEdit({ categoryId, wordId }) {
         draft.word = draft.word.trim();
         draft.updatedAt = Date.now();
 
-        // Save main word first (this creates photoId if there's a photo)
+        // Save the main word first — saveWord writes the (possibly new)
+        // photoId back onto the draft, so the paired word can share it.
         await saveWord(draft);
 
-        // Now save paired word if it has content
-        if (pairedDraft.word.trim()) {
-          pairedDraft.word = pairedDraft.word.trim();
-          pairedDraft.updatedAt = Date.now();
-          // Paired word shares the main word's photoId
-          pairedDraft.photoId = draft.photoId;
-          pairedDraft.language = otherLang; // Ensure language is set correctly
-
-          // Find paired category (e.g., Polish category matching Dutch one)
-          const pairedCatName = category?.name;
-          if (pairedCatName) {
-            const matchedPairedCat = (await getAll('categories')).find(
-              (c) => (c.language ?? 'nl') === otherLang && c.name === pairedCatName
+        const pairedText = pairedDraft.word.trim();
+        if (pairedText) {
+          if (!pairedWord) {
+            // No photo-linked pair yet. If the other language already has a
+            // word with this exact name (e.g. the seeded Polish "chleb"),
+            // update that record instead of creating a duplicate.
+            const existingByName = allWords.find(
+              (w) =>
+                (w.language ?? 'nl') === otherLang &&
+                (w.word || '').trim().toLowerCase() === pairedText.toLowerCase()
             );
-            if (matchedPairedCat) {
-              pairedDraft.categoryId = matchedPairedCat.id;
+            if (existingByName) {
+              pairedDraft = {
+                ...existingByName,
+                phraseText: pairedDraft.phraseText,
+                realWorldPrompt: pairedDraft.realWorldPrompt,
+                audioWord: pairedDraft.audioWord || existingByName.audioWord,
+                audioPhrase: pairedDraft.audioPhrase || existingByName.audioPhrase,
+              };
+            } else if (category) {
+              // Brand-new paired word: put it in the other language's
+              // matching category (never this language's).
+              const pairedCat = await findOrCreatePairedCategory(category, otherLang);
+              pairedDraft.categoryId = pairedCat.id;
             }
           }
-
+          pairedDraft.word = pairedText;
+          pairedDraft.language = otherLang;
+          // Share the photo — unless the other-language word already has its
+          // own photo, which we then leave alone.
+          if (!pairedDraft.photoId && !pairedDraft.photo) {
+            pairedDraft.photoId = draft.photoId || null;
+          }
+          pairedDraft.updatedAt = Date.now();
           await saveWord(pairedDraft);
         }
         pop();

@@ -114,16 +114,46 @@ export async function getPhoto(photoId) {
   return get('photos', photoId);
 }
 
-// Save a word, handling photo migration: if it has an inline photo Blob,
-// move it to the photos store and update the word's photoId instead.
+// Save a word, handling photo migration: an inline photo Blob moves to the
+// photos store and the word keeps only a photoId reference. The photoId is
+// written back onto the caller's draft (callers rely on it — e.g. to give a
+// paired-language word the same photo). Retaking a photo overwrites the SAME
+// photo record, so every word sharing that photoId sees the new picture.
 // Backward compatible: old words with inline photo still load, migrate on save.
 export async function saveWord(wordDraft) {
-  const word = { ...wordDraft };
-  if (word.photo) {
-    word.photoId = await savePhoto(word.photo);
-    delete word.photo;
+  if (wordDraft.photo) {
+    if (wordDraft.photoId) {
+      await put('photos', { id: wordDraft.photoId, blob: wordDraft.photo });
+    } else {
+      wordDraft.photoId = await savePhoto(wordDraft.photo);
+    }
   }
-  await put('words', word);
+  const record = { ...wordDraft };
+  delete record.photo; // the blob lives in the photos store, not on the word
+  await put('words', record);
+  return wordDraft;
+}
+
+// Loads photos-store blobs onto `word.photo` for display, for every word in
+// the list that carries a photoId. Legacy words with an inline photo are left
+// untouched. Mutates and returns the same array.
+export async function attachPhotos(words) {
+  const ids = [...new Set(words.map((w) => w.photoId).filter(Boolean))];
+  await Promise.all(
+    ids.map(async (id) => {
+      let rec = null;
+      try {
+        rec = await get('photos', id);
+      } catch {
+        return; // photo just won't display
+      }
+      if (!rec || !rec.blob) return;
+      for (const w of words) {
+        if (w.photoId === id) w.photo = rec.blob;
+      }
+    })
+  );
+  return words;
 }
 
 export function wordLabel(word) {

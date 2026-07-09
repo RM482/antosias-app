@@ -1,4 +1,4 @@
-import { getAll, putAllTransactional } from './db.js?v=26';
+import { getAll, putAllTransactional } from './db.js?v=27';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
@@ -7,7 +7,9 @@ import { getAll, putAllTransactional } from './db.js?v=26';
 // leave it half-imported. (Step order also matters technically: an
 // IndexedDB transaction auto-commits the moment you await anything
 // non-IndexedDB, so all decoding must finish before the write begins.)
-const SUPPORTED_FORMAT_VERSIONS = [1];
+// v1: photos inline on each word. v2 adds the shared photos store (words may
+// carry a photoId instead of an inline photo). v1 files still import fine.
+const SUPPORTED_FORMAT_VERSIONS = [1, 2];
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -24,7 +26,11 @@ async function dataUrlToBlob(dataUrl) {
 }
 
 export async function buildExportPayload() {
-  const [categories, words] = await Promise.all([getAll('categories'), getAll('words')]);
+  const [categories, words, photos] = await Promise.all([
+    getAll('categories'),
+    getAll('words'),
+    getAll('photos'),
+  ]);
   const exportedWords = await Promise.all(
     words.map(async (w) => ({
       ...w,
@@ -33,11 +39,17 @@ export async function buildExportPayload() {
       audioPhrase: w.audioPhrase ? await blobToDataUrl(w.audioPhrase) : null,
     }))
   );
+  // The shared photos store: exported once per photo, even when several words
+  // (Dutch + Polish) reference the same picture via photoId.
+  const exportedPhotos = await Promise.all(
+    photos.map(async (p) => ({ id: p.id, blob: p.blob ? await blobToDataUrl(p.blob) : null }))
+  );
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: Date.now(),
     categories,
     words: exportedWords,
+    photos: exportedPhotos,
   };
 }
 
@@ -119,6 +131,10 @@ export async function importPayload(payload) {
 
   const categories = payload.categories.filter(isUsableCategory);
   const usableWords = payload.words.filter(isUsableWord);
+  // photos is absent in v1 files; each entry needs an id and image data.
+  const usablePhotos = (payload.photos || []).filter(
+    (p) => p && typeof p.id === 'string' && typeof p.blob === 'string'
+  );
   const skipped =
     (payload.categories.length - categories.length) + (payload.words.length - usableWords.length);
 
@@ -130,8 +146,11 @@ export async function importPayload(payload) {
       audioPhrase: w.audioPhrase ? await dataUrlToBlob(w.audioPhrase) : null,
     }))
   );
+  const photos = await Promise.all(
+    usablePhotos.map(async (p) => ({ id: p.id, blob: await dataUrlToBlob(p.blob) }))
+  );
 
-  await putAllTransactional({ categories, words });
+  await putAllTransactional({ categories, words, photos });
   return { categories: categories.length, words: words.length, skipped };
 }
 

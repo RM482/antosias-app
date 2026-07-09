@@ -9,10 +9,10 @@ import {
   usesEen,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-  getPhoto,
-} from './db.js?v=26';
-import { playBlobSequence, unlockAudio } from './media.js?v=26';
-import { el, shuffle, onTap } from './dom.js?v=26';
+  attachPhotos,
+} from './db.js?v=27';
+import { playBlobSequence, unlockAudio } from './media.js?v=27';
+import { el, shuffle, onTap } from './dom.js?v=27';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -86,21 +86,9 @@ export async function startSession(categoryId) {
   unlockAudio();
   const [category, allWords] = await Promise.all([get('categories', categoryId), getAll('words')]);
 
-  // Load photos for words with photoId (new format)
-  const photoIds = new Set(allWords.map(w => w.photoId).filter(Boolean));
-  for (const photoId of photoIds) {
-    try {
-      const photoRecord = await getPhoto(photoId);
-      if (photoRecord) {
-        // Attach blob to all words that reference this photo
-        for (const word of allWords.filter(w => w.photoId === photoId)) {
-          word.photo = photoRecord.blob;
-        }
-      }
-    } catch {
-      // Ignore errors; words just won't display their photos
-    }
-  }
+  // Words that keep their photo in the photos store need the blob loaded
+  // before session screens can show pictures.
+  await attachPhotos(allWords);
 
   const language = category?.language ?? 'nl';
   const phrases = await getStandardPhrases(language);
