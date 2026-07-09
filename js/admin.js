@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos } from './db.js?v=27';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=27';
-import { startSession, initSession } from './session.js?v=27';
-import { el } from './dom.js?v=27';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=27';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos } from './db.js?v=28';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=28';
+import { startSession, initSession } from './session.js?v=28';
+import { el } from './dom.js?v=28';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=28';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -1216,6 +1216,10 @@ function errText(err) {
     } else {
       await ensureSeeded(language);
     }
+
+    // One-time rename of the seeded Dutch categories to Dutch names (skips any
+    // the parent has already renamed themselves).
+    await migrateDutchCategoryNames();
 
     requestPersistentStorage();
     render();

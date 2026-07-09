@@ -336,9 +336,9 @@ export function usesEen(word) {
 const SEED_DATA = {
   nl: {
     categories: [
-      { id: 'nl-cat-breakfast', name: 'Breakfast', emoji: '🍳', order: 0 },
-      { id: 'nl-cat-clothes', name: 'Clothes', emoji: '👕', order: 1 },
-      { id: 'nl-cat-toys', name: 'Toys / play', emoji: '🧸', order: 2 },
+      { id: 'nl-cat-breakfast', name: 'Ontbijt', emoji: '🍳', order: 0 },
+      { id: 'nl-cat-clothes', name: 'Kleren', emoji: '👕', order: 1 },
+      { id: 'nl-cat-toys', name: 'Speelgoed', emoji: '🧸', order: 2 },
     ],
     words: [
       { categoryId: 'nl-cat-breakfast', article: 'de', word: 'banaan', placeholderEmoji: '🍌' },
@@ -447,4 +447,27 @@ export async function ensureSeeded(language = 'nl') {
   // still behaves and future backfills short-circuit.
   await put('meta', { key: 'seeded', value: true });
   return true;
+}
+
+// One-time rename of the three seeded Dutch categories from their original
+// English names to Dutch ones. Runs at most once (guarded by a meta marker),
+// and only rewrites a category whose name still EXACTLY matches the old
+// English default — so a category the parent renamed themselves is left
+// untouched. Only the name field changes; ids, words, photos are all
+// unaffected.
+const NL_CATEGORY_RENAMES = {
+  'nl-cat-breakfast': { from: 'Breakfast', to: 'Ontbijt' },
+  'nl-cat-clothes': { from: 'Clothes', to: 'Kleren' },
+  'nl-cat-toys': { from: 'Toys / play', to: 'Speelgoed' },
+};
+
+export async function migrateDutchCategoryNames() {
+  if (await get('meta', 'migrate:nl-cat-names:v1')) return;
+  for (const [id, { from, to }] of Object.entries(NL_CATEGORY_RENAMES)) {
+    const cat = await get('categories', id);
+    if (cat && cat.name === from) {
+      await put('categories', { ...cat, name: to });
+    }
+  }
+  await put('meta', { key: 'migrate:nl-cat-names:v1', value: true });
 }
