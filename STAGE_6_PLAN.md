@@ -1,6 +1,6 @@
-# Stage 6 Plan — People, voices & the child-first flow (v2, revised after Codex review)
+# Stage 6 Plan — People, voices & the child-first flow (v3, after two Codex review rounds)
 
-**Status: DRAFT v2 — Codex round-1 findings incorporated. Not yet implemented.**
+**Status: DRAFT v3 — Codex round-1 and round-2 findings incorporated. Not yet implemented.**
 
 **Goal:** Antosia starts sessions herself: she picks a flag (🇳🇱/🇵🇱), picks a category
 from big photo tiles, (later) picks *whose voice* she wants by tapping a face, then sees
@@ -67,7 +67,13 @@ language → alert (parent-facing) and return to admin.
 are idempotent with no lookup logic. The `recordings` store gets **two indexes**:
 `personId` and `wordId`.
 
-**C4 — Deletion cleanup (all in one transaction with the primary delete):**
+**C4 — Deletion cleanup (atomic, via one named helper):**
+
+`deleteWordAndCleanup(wordId)` in db.js owns a **single `readwrite` transaction over
+`words` + `photos` + `recordings`** and does everything inside it with raw IDB requests
+— the reference check included. (IndexedDB auto-commits the moment you `await` anything
+non-IDB, so the helper must not be written as several awaited `remove()` calls; that's
+exactly the non-atomic shape this contract forbids.)
 
 - Delete word → also delete all `recordings` with that `wordId` (via the `wordId`
   index), and delete its photo from the `photos` store **iff no other word references
@@ -104,6 +110,33 @@ into a small shared module (`js/gate.js`) exporting exactly that function; both
 today: hide+clear `#session`, unhide `#app`, invoke the exit callback so the admin
 home screen re-renders.
 
+**C9 — Session eligibility is layered; "Skip" always wins.** Today's
+`isSessionEligible(word)` couples two checks: inline audio exists AND not excluded.
+Non-default voices break that coupling (grandma's words may have no inline audio), so
+split it:
+
+```js
+// Layer 1 — parent intent, voice-independent:
+isWordAllowedInSessions(word)   // word.excluded !== true (callers filter language/category)
+// Layer 2 — audio availability for the chosen voice:
+//   default voice   → !!word.audioWord            (today's inline audio)
+//   non-default     → a recordings row `${personId}:word:${word.id}` with audioWord
+```
+
+Every pool — session targets, distractors, ready-counts, Start/flag/tile/face
+playability — is Layer 1 AND Layer 2. A word the parent marked "Skip" can never
+re-enter a session through ANY voice. Keep `isSessionEligible` as the default-voice
+composition of the two layers so existing call sites stay correct.
+
+**C10 — Bootstrap: Play never waits for People setup.** Playability derives from audio
+(Layer 2), not from `people` records. With zero people configured, child mode works
+end-to-end: flag → tiles → (face pick auto-skips) → intro **skipped** (no person) →
+collage **skipped** (no people) → session on today's inline audio. The default-voice
+person, once created, only *adds* the intro photo/audio, the collage membership, and
+the face-pick label. In face pick, the default voice's tile uses the default person's
+photo when one exists, else a flag-emoji tile — never blocks. The People screen's hint
+card (§2.1) is the nudge to set this up; the child is never gated on it.
+
 ---
 
 ## Big picture: three phases, each independently shippable
@@ -111,8 +144,8 @@ home screen re-renders.
 | Phase | What ships | Child sees |
 |---|---|---|
 | **A** | People registry + child mode | Flag → tiles → papa's photo + "Nederlands" → collage → today's session |
-| **B** | Multi-voice playback + face pick + in-app "record as person X" | Same, plus a silent face-pick screen when a category has >1 voice; the intro then shows the chosen person |
-| **C** | Remote recording requests + response import + coverage view | Nothing new — parent-side plumbing that feeds Phase B |
+| **B** | Multi-voice playback + face pick + in-app "record as person X" + per-person coverage display (§3.4) | Same, plus a silent face-pick screen when a category has >1 voice; the intro then shows the chosen person |
+| **C** | Remote recording requests + recording page + response import | Nothing new — parent-side plumbing that feeds Phase B |
 
 The **database version bump (v2 → v3) happens once, at the start of Phase A**, creating
 *both* new stores (`people` and `recordings`) even though `recordings` is only used from
@@ -293,9 +326,11 @@ Screen details:
 ### 3.1 Voice resolution helpers (db.js)
 
 ```js
-// All voices that can carry a session for this category+language:
-// - the default-voice person, if ≥2 words in the category have inline audioWord
-// - every other person with ≥2 'word' recordings pointing at words in this category
+// All voices that can carry a session for this category+language. Words are
+// counted only if they pass BOTH layers of contract C9 (allowed-in-sessions
+// AND audio available for that voice) — an excluded word counts for no voice:
+// - the default voice, if ≥2 such words have inline audioWord
+// - every other person with ≥2 'word' recordings pointing at such words
 async function voicesForCategory(categoryId, language) → [{ person, eligibleWordIds }]
 
 // Per-word audio for a chosen voice:
@@ -307,10 +342,11 @@ function audioForWord(word, personId, recordingsByWordId)
 ### 3.2 Session changes (session.js)
 
 - `startSession(categoryId, { personId })`:
-  - If `personId` is a non-default person: the eligible pool = words in the category that
-    person has recorded (decision 3 — only her words). The ≥2-words check applies to
-    *that pool*. Distractors also come only from that pool (plus, if needed, other
-    same-language words that person recorded in other categories).
+  - If `personId` is a non-default person: the eligible pool = words in the category
+    that pass C9 for that voice — i.e. not excluded AND that person recorded them
+    (decision 3 — only her words). The ≥2-words check applies to *that pool*.
+    Distractors also come only from that pool (plus, if needed, other same-language
+    C9-passing words that person recorded in other categories).
   - Carriers: use that person's `carrier` recordings. **A missing carrier degrades exactly
     like today** — the game plays the bare word (prompt) or stays silent (goed zo). No
     fallback to another person's voice (decision 3: one consistent voice).
@@ -333,9 +369,13 @@ grandma visits, hands you her voice directly:
 - On the person edit screen: **"🎙 Record words in {name}'s voice"** → a recording
   walkthrough screen: pick a category, then step through its words one at a time —
   word photo + label, Record (maxMs 6000) / Play / Redo / Skip, progress "3 / 10".
-  Then the carriers for that language (same list as Settings phrases, plus 'goed').
-  Each completed item writes/overwrites that person's `recordings` row immediately
-  (crash-safe; no giant in-memory draft; deterministic ids make re-records overwrites).
+  When a word has a `phraseText`, the same step also offers the optional phrase
+  recording (15s cap, skippable) — parity with the remote flow, stored as
+  `audioPhrase` on the same row. Then the carriers for that language — exactly the
+  `PHRASE_SCHEMA` list the Settings screen shows ('goed' is already part of it; do
+  not add it twice). Each completed item writes/overwrites that person's `recordings`
+  row immediately (crash-safe; no giant in-memory draft; deterministic ids make
+  re-records overwrites).
 - Person rows on the People screen show coverage: "Ontbijt 6/10 · Speelgoed 4/4".
 
 ### 3.5 Phase B verification
@@ -400,6 +440,12 @@ import response file ◀──WhatsApp/AirDrop/email── share sheet ◀──
 - Startup routing: `?record=<gistId>` branches to this page **before any IndexedDB
   access** (contract C5). Fetch the gist with the truncation-aware helper
   (`fetchGistJson(gistId)`, extracted from backup.js).
+- **Validate before rendering anything.** The link is an arbitrary Gist; a bad or
+  malicious payload must fail fast with "This recording link is invalid" rather than
+  build a giant in-memory page. Reject unless: `formatVersion === 'recording-request-1'`;
+  `language` is a known code; `words` is an array of ≤ 60 items each with a string
+  `wordId` and `word`; `carriers` ≤ 10 items; every `thumb` data-URL ≤ 120 KB; total
+  fetched JSON ≤ 8 MB (checked on the raw text before `JSON.parse`).
 - Plain mobile-browser page (Safari AND Android Chrome), no install:
   1. Greeting: "Hoi Oma Els! Antosia's app needs your voice — {n} words, ~{n} minutes."
      Big "Start" (this tap unlocks the mic prompt context).
