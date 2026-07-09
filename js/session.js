@@ -9,9 +9,10 @@ import {
   usesEen,
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
-} from './db.js?v=23';
-import { playBlobSequence, unlockAudio } from './media.js?v=23';
-import { el, shuffle, onTap } from './dom.js?v=23';
+  getPhoto,
+} from './db.js?v=24';
+import { playBlobSequence, unlockAudio } from './media.js?v=24';
+import { el, shuffle, onTap } from './dom.js?v=24';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -84,6 +85,23 @@ export async function startSession(categoryId) {
   // inside a user gesture (iOS requirement) before the first clip autoplays.
   unlockAudio();
   const [category, allWords] = await Promise.all([get('categories', categoryId), getAll('words')]);
+
+  // Load photos for words with photoId (new format)
+  const photoIds = new Set(allWords.map(w => w.photoId).filter(Boolean));
+  for (const photoId of photoIds) {
+    try {
+      const photoRecord = await getPhoto(photoId);
+      if (photoRecord) {
+        // Attach blob to all words that reference this photo
+        for (const word of allWords.filter(w => w.photoId === photoId)) {
+          word.photo = photoRecord.blob;
+        }
+      }
+    } catch {
+      // Ignore errors; words just won't display their photos
+    }
+  }
+
   const language = category?.language ?? 'nl';
   const phrases = await getStandardPhrases(language);
   const eligibleInCategory = allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));

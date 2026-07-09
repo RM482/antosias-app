@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible } from './db.js?v=23';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=23';
-import { startSession, initSession } from './session.js?v=23';
-import { el } from './dom.js?v=23';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=23';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=24';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=24';
+import { startSession, initSession } from './session.js?v=24';
+import { el } from './dom.js?v=24';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=24';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -621,6 +621,16 @@ async function renderWordEdit({ categoryId, wordId }) {
         updatedAt: now,
       };
 
+  // Load photo from photos store if this word has a photoId (new format)
+  if (draft.photoId) {
+    try {
+      const photoRecord = await getPhoto(draft.photoId);
+      if (photoRecord) draft.photo = photoRecord.blob;
+    } catch {
+      // Ignore errors; photo just won't display
+    }
+  }
+
   appEl.appendChild(
     topbar({ title: isNew ? 'New word' : wordLabel(draft) || 'Edit word', onBack: () => pop() })
   );
@@ -779,7 +789,7 @@ async function renderWordEdit({ categoryId, wordId }) {
         }
         draft.word = draft.word.trim();
         draft.updatedAt = Date.now();
-        await put('words', draft);
+        await saveWord(draft);
         pop();
       },
     })

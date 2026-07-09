@@ -1,5 +1,5 @@
 const DB_NAME = 'antosia-app';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -28,6 +28,9 @@ function openDB() {
         const store = db.createObjectStore('words', { keyPath: 'id' });
         store.createIndex('categoryId', 'categoryId');
         store.createIndex('lastPracticed', 'lastPracticed');
+      }
+      if (!db.objectStoreNames.contains('photos')) {
+        db.createObjectStore('photos', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -97,6 +100,30 @@ export async function putAllTransactional(writes) {
     t.onerror = () => reject(storageError(t.error, 'restoring data'));
     t.onabort = () => reject(storageError(t.error, 'restoring data (transaction aborted, possibly out of storage space)'));
   });
+}
+
+// --- Photo storage (shared across languages) ---
+
+export async function savePhoto(blob) {
+  const id = newId();
+  await put('photos', { id, blob });
+  return id;
+}
+
+export async function getPhoto(photoId) {
+  return get('photos', photoId);
+}
+
+// Save a word, handling photo migration: if it has an inline photo Blob,
+// move it to the photos store and update the word's photoId instead.
+// Backward compatible: old words with inline photo still load, migrate on save.
+export async function saveWord(wordDraft) {
+  const word = { ...wordDraft };
+  if (word.photo) {
+    word.photoId = await savePhoto(word.photo);
+    delete word.photo;
+  }
+  await put('words', word);
 }
 
 export function wordLabel(word) {
