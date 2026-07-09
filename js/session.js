@@ -290,7 +290,7 @@ function renderGameStage(state) {
   for (const opt of options) {
     const btn = el('button', { type: 'button', class: 'session-option' });
     btn.appendChild(wordVisual(opt, 'session-option-photo'));
-    onTap(btn, async () => {
+    onTap(btn, () => {
       if (answered) return;
       if (opt.id === word.id) {
         answered = true;
@@ -303,9 +303,10 @@ function renderGameStage(state) {
       } else {
         btn.classList.add('wiggle');
         setTimeout(() => btn.classList.remove('wiggle'), 500);
-        await sayCorrection(opt);
-        // After correction, re-ask the prompt so she gets another chance
-        sayPrompt();
+        sayCorrection(opt).then(() => {
+          // After correction, re-ask the prompt so she gets another chance
+          sayPrompt();
+        });
       }
     });
     optionsWrap.appendChild(btn);
