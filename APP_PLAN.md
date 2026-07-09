@@ -1,6 +1,42 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 8 July 2026)
+## Status (as of 9 July 2026) — live app `?v=28`
+
+**⏭️ NEXT SESSION: implement STAGE_6_PLAN.md (v3, twice Codex-reviewed — read its
+"Implementation contracts" section first).** Phase A starts with step ⓪, the
+orphaned-photo cleanup fix (a live bug: deleting a word leaves its photos-store blob
+behind). Before coding, two 1-minute phone checks from yesterday's deploys:
+(1) Dutch categories should now read Ontbijt / Kleren / Speelgoed (the v28 rename
+shipped but was not confirmed on-device); (2) confirm the stray "Chleb" entry on the
+Dutch Breakfast list was deleted (leftover from a fixed pairing bug).
+
+**Shipped and verified on the real iPhone, 9 July (v23–v28):**
+- **Game-loop polish from real use:** photo taps can't stack/loop audio anymore (one
+  clip must finish first); a correct tap plays the parent-recorded "Goed zo!"; a wrong
+  tap says the correction ("Nee, dit is …") and then automatically re-asks the prompt.
+  New `goed` phrase slots in Settings for both languages (Dutch one recorded).
+- **Shared photos store (IndexedDB v2):** photos moved out of word records into a
+  `photos` store; words carry `photoId`. One photo is shared between a Dutch word and
+  its Polish twin.
+- **Bilingual word editor:** editing any word shows an "Also in {other language}"
+  section (word, phrase, prompt, audio — no articles for Polish). Saving creates/updates
+  the twin with the same photo, in the right paired category (Ontbijt↔Śniadanie matched
+  by seed-id; custom categories get a linked counterpart created). Typing a name that
+  already exists in the other language updates that word instead of duplicating.
+  Verified with brood↔chleb.
+- **Backups carry photos (formatVersion 2; still imports v1 files).** A real backup was
+  taken and saved on 9 July after these changes.
+- **Dutch category names:** seed + one-time migration renames Breakfast/Clothes/Toys →
+  Ontbijt/Kleren/Speelgoed (skips any category the parent renamed themselves).
+
+**Stage 5 (Polish + language switching) is functionally done and in real use** — flag
+switcher, Polish seeds, language-scoped editor/phrases/sessions verified on-device.
+What remains is content, not code: real Polish audio + the two Polish carriers recorded
+by the mother (STAGE_5_PLAN.md step 4), now easier via the bilingual editor.
+
+---
+
+## Previous status (8 July 2026)
 
 **Stages 1–3 are built, deployed, and verified working on the real iPhone — including first real use with Antosia, who loved it.** Her real-toddler-hands feedback drove a round of touch-interaction fixes (below). Stage 4 (polish) is up next.
 

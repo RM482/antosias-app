@@ -14,6 +14,8 @@ The user is a complete beginner (first git/terminal/GitHub experience). **Always
 - `spike.html` is a kept-on-purpose iOS test harness — don't delete.
 - Syntax-check with `node --check js/*.js` before committing.
 - **Toddler touch handling:** in child session mode (`session.js`), always wire buttons with `onTap()` from `dom.js`, not raw `click` listeners — real toddler-hands testing showed plain `click` misses holds/drags/wobbly presses. `onTap` fires on `touchend` (any hold length) with `click` as a desktop fallback. Session mode also blocks pinch-zoom and page-drag by default (`touchmove` is prevented unless the element is inside `.allow-scroll`) — add that class to any session content that must scroll.
+- **Photos live in the `photos` store (IndexedDB v2), shared across language twins.** Words carry `photoId`, not a photo Blob (legacy inline `word.photo` still supported, migrates on save). Before displaying words anywhere, call `attachPhotos(words)` from `db.js`; save words with `saveWord()` (it writes the new `photoId` back onto your draft — pairing logic depends on that). Backups are formatVersion 2 (photos store included; v1 files still import). Known bug: deleting a word orphans its photo — the fix is Stage 6 Phase A step ⓪.
+- **Audio playback:** never fire clips concurrently — the listen stage gates on an `isPlaying` flag; keep that pattern for any new audio triggers (stacked audio loops confused the toddler in real use).
 
 ## Deploy & sharing
 

@@ -1,6 +1,12 @@
-# Stage 5 — Polish + language switching (in progress)
+# Stage 5 — Polish + language switching (code DONE; step 4 content remains)
 
-**Live app version:** cache-bust `?v=22` (bump on every deploy; see CLAUDE.md).
+> **Status update (9 July 2026, app at `?v=28`):** Steps 1–3 below are verified in real
+> use on the iPhone. Step 4 (real Polish audio + the two Polish carriers, recorded by
+> the mother) is the only remainder — a content task, made easier by the bilingual word
+> editor added on 9 July (see APP_PLAN.md status). The "RESUME HERE" section below is
+> superseded and kept only for history; the next implementation work is STAGE_6_PLAN.md.
+
+**Live app version:** see APP_PLAN.md (this header previously said `?v=22`; the version moves on every deploy).
 
 ## Where things stand (all deployed on `main`)
 
