@@ -1,8 +1,8 @@
-import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=25';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=25';
-import { startSession, initSession } from './session.js?v=25';
-import { el } from './dom.js?v=25';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=25';
+import { ensureSeeded, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, getPhoto } from './db.js?v=26';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=26';
+import { startSession, initSession } from './session.js?v=26';
+import { el } from './dom.js?v=26';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=26';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -906,28 +906,28 @@ async function renderWordEdit({ categoryId, wordId }) {
         draft.word = draft.word.trim();
         draft.updatedAt = Date.now();
 
-        // If paired word has any content, save it too (with shared photo)
+        // Save main word first (this creates photoId if there's a photo)
+        await saveWord(draft);
+
+        // Now save paired word if it has content
         if (pairedDraft.word.trim()) {
           pairedDraft.word = pairedDraft.word.trim();
           pairedDraft.updatedAt = Date.now();
-          pairedDraft.photoId = draft.photoId; // Ensure they share the photo
-          // Find or create the paired category
+          // Paired word shares the main word's photoId
+          pairedDraft.photoId = draft.photoId;
+          pairedDraft.language = otherLang; // Ensure language is set correctly
+
+          // Find paired category (e.g., Polish category matching Dutch one)
           const pairedCatName = category?.name;
-          let pairedCat = pairedWord?.categoryId
-            ? allWords.find((w) => w.id === pairedWord.categoryId)?.categoryId
-            : null;
-          if (!pairedCat && pairedCatName) {
+          if (pairedCatName) {
             const matchedPairedCat = (await getAll('categories')).find(
               (c) => (c.language ?? 'nl') === otherLang && c.name === pairedCatName
             );
-            pairedDraft.categoryId = matchedPairedCat?.id || category?.id; // Fallback to same category ID
+            if (matchedPairedCat) {
+              pairedDraft.categoryId = matchedPairedCat.id;
+            }
           }
-        }
 
-        // Save main word with photo migration
-        await saveWord(draft);
-        // Save paired word if it has content
-        if (pairedDraft.word.trim()) {
           await saveWord(pairedDraft);
         }
         pop();

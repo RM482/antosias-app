@@ -10,9 +10,9 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   getPhoto,
-} from './db.js?v=25';
-import { playBlobSequence, unlockAudio } from './media.js?v=25';
-import { el, shuffle, onTap } from './dom.js?v=25';
+} from './db.js?v=26';
+import { playBlobSequence, unlockAudio } from './media.js?v=26';
+import { el, shuffle, onTap } from './dom.js?v=26';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
