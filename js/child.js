@@ -1,5 +1,5 @@
 import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=28';
-import { unlockAudio } from './media.js?v=28';
+import { unlockAudio, playBlobSequence } from './media.js?v=28';
 import { el, onTap } from './dom.js?v=28';
 import { startSession } from './session.js?v=28';
 import { mountParentGate } from './gate.js?v=28';
@@ -122,5 +122,90 @@ function renderTileScreen(state, language) {
 // intro/collage screens simply skip themselves (contract C10).
 function beginSession(state, language, category) {
   const person = state.people.find((p) => p.language === language && p.isDefaultVoice) || null;
-  startSession(category.id, { personId: person ? person.id : null });
+  renderIntro(state, language, person, () =>
+    renderCollage(state, language, () =>
+      startSession(category.id, { personId: person ? person.id : null })
+    )
+  );
+}
+
+// Wraps a screen-advance callback so it fires at most once, and never after
+// the parent gate has already exited child mode — otherwise a still-pending
+// auto-advance timer could relaunch the session overlay over the admin screen.
+function advanceOnce(fn) {
+  let done = false;
+  return () => {
+    if (done || sessionEl.hidden) return;
+    done = true;
+    fn();
+  };
+}
+
+// What the person is saying in their intro clip — the language's own name.
+const NATIVE_LANGUAGE_NAMES = { nl: 'Nederlands!', pl: 'Polski!' };
+
+// --- 4. Intro: full-screen photo + voice of the session's host -----------------
+
+// Degrades per contract C2: photo-only and audio-only both still show the
+// moment; a person with neither (or no person at all) skips the screen
+// entirely. Never blocks the child.
+function renderIntro(state, language, person, next) {
+  if (!person || (!person.photo && !person.introAudio)) {
+    next();
+    return;
+  }
+  const advance = advanceOnce(next);
+
+  const screen = el('div', { class: 'session-screen child-intro-stage' });
+  if (person.photo) {
+    const photo = el('div', { class: 'child-intro-photo' });
+    const img = el('img', { alt: person.name || '' });
+    img.src = URL.createObjectURL(person.photo);
+    photo.appendChild(img);
+    screen.appendChild(photo);
+  }
+  screen.appendChild(
+    el('div', { class: 'child-intro-label', text: NATIVE_LANGUAGE_NAMES[language] || '' })
+  );
+  onTap(screen, advance);
+  showScreen(screen);
+
+  if (person.introAudio) {
+    // Advance shortly after the clip ends; a tap can always skip ahead.
+    playBlobSequence([person.introAudio])
+      .catch(() => {})
+      .then(() => setTimeout(advance, 600));
+  } else {
+    setTimeout(advance, 2500);
+  }
+}
+
+// --- 5. Collage: the people of this language -----------------------------------
+
+// Always follows the intro (plan decision 4). Skips itself only when nobody
+// with a photo is marked "in collage" for this language.
+function renderCollage(state, language, next) {
+  const collagePeople = state.people.filter(
+    (p) => p.language === language && p.inCollage && p.photo
+  );
+  if (collagePeople.length === 0) {
+    next();
+    return;
+  }
+  const advance = advanceOnce(next);
+
+  const screen = el('div', { class: 'session-screen child-collage-stage' });
+  const grid = el('div', { class: `child-collage${collagePeople.length > 4 ? ' cols-3' : ''}` });
+  for (const p of collagePeople) {
+    const cell = el('div', { class: 'child-collage-cell' });
+    const img = el('img', { alt: p.name || '' });
+    img.src = URL.createObjectURL(p.photo);
+    cell.appendChild(img);
+    grid.appendChild(cell);
+  }
+  screen.appendChild(grid);
+  onTap(screen, advance);
+  showScreen(screen);
+
+  setTimeout(advance, 5000);
 }
