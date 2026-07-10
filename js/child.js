@@ -1,4 +1,4 @@
-import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=30';
+import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=30';
 import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=30';
 import { el, onTap } from './dom.js?v=30';
 import { startSession } from './session.js?v=30';
@@ -17,14 +17,15 @@ export async function startChildMode(onExit) {
   // Inside the Play tap: unlock audio while we're still in a user gesture.
   unlockAudio();
 
-  const [allCategories, allWords, people] = await Promise.all([
+  const [allCategories, allWords, people, recordings] = await Promise.all([
     getAll('categories'),
     getAll('words'),
     getAll('people'),
+    getAll('recordings'),
   ]);
   await attachPhotos(allWords);
 
-  const state = { allCategories, allWords, people, onExit };
+  const state = { allCategories, allWords, people, recordings, onExit };
 
   // Playable = the language has at least one category a session can start in.
   const playableLanguages = LANGUAGES.filter((l) => playableCategories(state, l.code).length > 0);
@@ -55,14 +56,21 @@ function showScreen(screen) {
   sessionEl.appendChild(screen);
 }
 
-function eligibleWordsIn(state, categoryId) {
-  return state.allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));
+// All voices (default and family) that can carry a session for this category.
+function voicesFor(state, categoryId, language) {
+  return voicesForCategoryFrom(
+    { words: state.allWords, people: state.people, recordings: state.recordings },
+    categoryId,
+    language
+  );
 }
 
+// Playable = ANY voice can carry it — a category only grandma recorded is a
+// real tile even before the parent's own audio exists there.
 function playableCategories(state, language) {
   return state.allCategories
     .filter((c) => (c.language ?? 'nl') === language)
-    .filter((c) => eligibleWordsIn(state, c.id).length >= 2)
+    .filter((c) => voicesFor(state, c.id, language).length > 0)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
@@ -95,8 +103,12 @@ function renderTileScreen(state, language) {
     tile.appendChild(el('div', { class: 'child-tile-name', text: cat.name }));
 
     // Up to 4 real word photos inside the tile, so she recognizes the
-    // category by its pictures before she can read.
-    const photos = eligibleWordsIn(state, cat.id).filter((w) => w.photo).slice(0, 4);
+    // category by its pictures before she can read. Any non-skipped word's
+    // photo will do — pictures don't need audio (a grandma-only category
+    // still gets a photo tile).
+    const photos = state.allWords
+      .filter((w) => w.categoryId === cat.id && w.excluded !== true && w.photo)
+      .slice(0, 4);
     if (photos.length > 0) {
       const strip = el('div', { class: 'child-tile-photos' });
       for (const w of photos) {
@@ -117,17 +129,62 @@ function renderTileScreen(state, language) {
 
 // --- 3–6. Voice → intro → collage → session -----------------------------------------------------
 
-// Phase A: exactly one possible voice per language (the default person, whose
-// voice is the words' own inline audio), so the face-pick screen auto-skips
-// (contract C1). With no people configured at all this still plays — the
+// One voice → skip the face pick (contract C1); more than one → she picks by
+// tapping a face. With no people configured at all this still plays — the
 // intro/collage screens simply skip themselves (contract C10).
 function beginSession(state, language, category) {
-  const person = state.people.find((p) => p.language === language && p.isDefaultVoice) || null;
+  const voices = voicesFor(state, category.id, language);
+  if (voices.length === 0) return; // tile shouldn't exist, but never error
+  if (voices.length === 1) {
+    proceedWithVoice(state, language, category, voices[0]);
+  } else {
+    renderFacePick(state, language, category, voices);
+  }
+}
+
+function proceedWithVoice(state, language, category, voice) {
+  const person = voice.person; // null for a default voice with no person record
   renderIntro(state, language, person, () =>
     renderCollage(state, language, () =>
       startSession(category.id, { personId: person ? person.id : null })
     )
   );
+}
+
+// --- 3. Face pick: whose voice does she want? -----------------------------------
+
+// Tapping a face is a SILENT selection (plan decision 2) — the chosen
+// person's full-screen intro always follows as its own screen. The default
+// voice's tile shows the default person's photo when one exists, else the
+// language flag (contract C10); a person without a photo shows their name in
+// a colored circle — never blocks.
+function renderFacePick(state, language, category, voices) {
+  const screen = el('div', { class: 'session-screen child-face-stage' });
+  const row = el('div', { class: 'child-faces' });
+
+  for (const voice of voices) {
+    const btn = el('button', { type: 'button', class: 'child-face-btn' });
+    const photo = el('div', { class: 'child-face-photo' });
+    if (voice.person && voice.person.photo) {
+      const img = el('img', { alt: voice.person.name || '' });
+      img.src = URL.createObjectURL(voice.person.photo);
+      photo.appendChild(img);
+    } else if (voice.isDefault) {
+      photo.textContent = (LANGUAGES.find((l) => l.code === language) || {}).flag || '👤';
+    } else {
+      photo.textContent = (voice.person.name || '?').slice(0, 2);
+      photo.classList.add('child-face-initials');
+    }
+    btn.appendChild(photo);
+    if (voice.person && voice.person.name) {
+      btn.appendChild(el('div', { class: 'child-face-name', text: voice.person.name }));
+    }
+    onTap(btn, () => proceedWithVoice(state, language, category, voice));
+    row.appendChild(btn);
+  }
+
+  screen.appendChild(row);
+  showScreen(screen);
 }
 
 // Wraps a screen-advance callback so it fires at most once, and never after

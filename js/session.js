@@ -3,6 +3,7 @@ import {
   get,
   put,
   isSessionEligible,
+  isWordAllowedInSessions,
   isDue,
   wordLabel,
   getStandardPhrases,
@@ -92,11 +93,46 @@ export async function startSession(categoryId, opts = {}) {
   await attachPhotos(allWords);
 
   const language = category?.language ?? 'nl';
-  const phrases = await getStandardPhrases(language);
-  const eligibleInCategory = allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));
-  // Distractors stay within the same language so a Polish word can't appear in
-  // a Dutch session (and vice versa).
-  const allEligible = allWords.filter((w) => isSessionEligible(w) && (w.language ?? 'nl') === language);
+
+  // Whose voice carries this session. Default voice (or no person at all) →
+  // today's behavior: the words' own inline audio + the meta-store carrier
+  // phrases. A non-default person → ONLY words they recorded (plan decision
+  // 3: one session, one voice) with their audio overlaid on word copies, and
+  // only their carrier clips — a missing carrier degrades to the bare word,
+  // never falls back to another person's voice.
+  const person = opts.personId ? await get('people', opts.personId) : null;
+  let phrases;
+  let eligibleInCategory;
+  let allEligible;
+  if (person && !person.isDefaultVoice) {
+    const recs = (await getAll('recordings')).filter((r) => r.personId === person.id);
+    const rowByWordId = new Map(
+      recs.filter((r) => r.type === 'word' && r.audioWord).map((r) => [r.wordId, r])
+    );
+    const voiced = allWords
+      .filter(
+        (w) =>
+          (w.language ?? 'nl') === language && isWordAllowedInSessions(w) && rowByWordId.has(w.id)
+      )
+      .map((w) => ({
+        ...w,
+        audioWord: rowByWordId.get(w.id).audioWord,
+        audioPhrase: rowByWordId.get(w.id).audioPhrase || null,
+      }));
+    eligibleInCategory = voiced.filter((w) => w.categoryId === categoryId);
+    // Distractors: that person's other recorded words (same language).
+    allEligible = voiced;
+    phrases = {};
+    for (const r of recs) {
+      if (r.type === 'carrier' && r.language === language && r.blob) phrases[r.name] = r.blob;
+    }
+  } else {
+    phrases = await getStandardPhrases(language);
+    eligibleInCategory = allWords.filter((w) => w.categoryId === categoryId && isSessionEligible(w));
+    // Distractors stay within the same language so a Polish word can't appear
+    // in a Dutch session (and vice versa).
+    allEligible = allWords.filter((w) => isSessionEligible(w) && (w.language ?? 'nl') === language);
+  }
 
   if (eligibleInCategory.length < 2) {
     alert(
@@ -114,11 +150,9 @@ export async function startSession(categoryId, opts = {}) {
   const state = {
     category,
     language,
-    // Whose voice this session plays in. Unused until Stage 6 Phase B — today
-    // every session uses the words' own inline audio (the default voice).
-    personId: opts.personId || null,
+    personId: opts.personId || null, // whose voice this session plays in
     steps,
-    phrases, // language-scoped carrier recordings (see getStandardPhrases)
+    phrases, // this voice's carrier clips (meta store for the default voice)
     index: 0,
     stage: 'listen', // 'listen' | 'game' | 'prompt'
     observations: {}, // wordId -> { understood, said }

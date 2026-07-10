@@ -265,13 +265,76 @@ export function wordLabel(word) {
   return [word.article, word.word].filter(Boolean).join(' ');
 }
 
-// A word can appear in a session only if it has word audio AND the parent
-// hasn't marked it "skip". This is the single source of truth used
-// everywhere words are counted or picked (session targets, distractors,
-// ready-counts, Start-button state) so an excluded word can never slip in
-// as, say, a distractor.
+// Session eligibility is layered (STAGE_6_PLAN.md contract C9):
+// Layer 1 — parent intent, voice-independent: not marked "skip".
+// Layer 2 — audio availability for the chosen voice: the default voice plays
+// the word's own inline audio; any other person needs a recordings row.
+// Every pool (targets, distractors, ready-counts, playability) must apply
+// BOTH layers, so an excluded word can never re-enter through any voice.
+export function isWordAllowedInSessions(word) {
+  return word.excluded !== true;
+}
+
+// The default-voice composition of the two layers — what "ready" means for
+// sessions played in the parent's own (inline) voice. Single source of truth
+// for all default-voice call sites.
 export function isSessionEligible(word) {
-  return !!word.audioWord && word.excluded !== true;
+  return !!word.audioWord && isWordAllowedInSessions(word);
+}
+
+// --- Voice recordings (Stage 6 Phase B) ----------------------------------------
+// Deterministic ids (contract C3): re-recording or re-importing the same
+// (person, word) or (person, carrier) is a pure overwrite, never a duplicate.
+
+export function wordRecordingId(personId, wordId) {
+  return `${personId}:word:${wordId}`;
+}
+
+export function carrierRecordingId(personId, language, name) {
+  return `${personId}:carrier:${language}:${name}`;
+}
+
+// All voices that can carry a session for this category+language, computed
+// from preloaded arrays (callers that already hold the data — e.g. child
+// mode's tile screen — avoid re-reading the stores for every category).
+// Each entry: { person, isDefault, eligibleWordIds }. The default voice's
+// `person` is null until the parent creates themselves in People & voices —
+// playability never depends on that (contract C10).
+export function voicesForCategoryFrom({ words, people, recordings }, categoryId, language) {
+  const catWords = words.filter(
+    (w) => w.categoryId === categoryId && isWordAllowedInSessions(w)
+  );
+  const voices = [];
+
+  const defaultIds = catWords.filter((w) => !!w.audioWord).map((w) => w.id);
+  if (defaultIds.length >= 2) {
+    voices.push({
+      person: people.find((p) => p.language === language && p.isDefaultVoice) || null,
+      isDefault: true,
+      eligibleWordIds: defaultIds,
+    });
+  }
+
+  for (const p of people) {
+    if (p.language !== language || p.isDefaultVoice) continue;
+    const recorded = new Set(
+      recordings
+        .filter((r) => r.personId === p.id && r.type === 'word' && r.audioWord)
+        .map((r) => r.wordId)
+    );
+    const ids = catWords.filter((w) => recorded.has(w.id)).map((w) => w.id);
+    if (ids.length >= 2) voices.push({ person: p, isDefault: false, eligibleWordIds: ids });
+  }
+  return voices;
+}
+
+export async function voicesForCategory(categoryId, language) {
+  const [words, people, recordings] = await Promise.all([
+    getAll('words'),
+    getAll('people'),
+    getAll('recordings'),
+  ]);
+  return voicesForCategoryFrom({ words, people, recordings }, categoryId, language);
 }
 
 // Spaced repetition: a word is "due" when it has never been scheduled

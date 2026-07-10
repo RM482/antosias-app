@@ -770,6 +770,61 @@ p {
   border-radius: 10px;
 }
 
+/* Face pick: whose voice? Big round photo buttons, silent selection. */
+.child-faces {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.child-face-btn {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.child-face-btn:active {
+  transform: scale(0.96);
+}
+
+.child-face-photo {
+  width: min(38vw, 170px);
+  height: min(38vw, 170px);
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--card-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+}
+
+.child-face-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.child-face-initials {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.child-face-name {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+
 /* Intro: the session host, big and warm. */
 .child-intro-stage {
   gap: 20px;
