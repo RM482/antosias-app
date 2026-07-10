@@ -1,9 +1,41 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026) — live app `?v=29`
+## Status (as of 10 July 2026, later) — live app `?v=31`
 
-**Stage 6 Phase A (STAGE_6_PLAN.md) is implemented and deployed — needs on-phone
-verification (§2.5 of that plan).** What shipped in v29, in plan order:
+**Stage 6 Phases A AND B are implemented and deployed.** Phase A shipped as v29 and is
+in real use. v30 fixed two real-use reports: (1) the category rename finally works on
+the phone — the v28 migration matched the newer `nl-cat-*` ids but her install (seeded
+pre-Stage-5) has the original `cat-*` ids; pass v2 matches by exact English NAME under a
+fresh marker; (2) audio can no longer overlap — `playBlobSequence(blobs, { key })`
+enforces one-sound-at-a-time centrally (different key cuts the current sound off, same
+key while playing is ignored so the clip finishes; resolves
+completed/cancelled/duplicate, and the wrong-answer re-ask chains only on `completed`).
+
+**Phase B shipped as v31 (verified locally, needs the §3.5 on-phone pass):**
+- **Contract C9 layering:** `isWordAllowedInSessions` (parent intent) split from audio
+  availability; `isSessionEligible` stays as the default-voice composition.
+- **`voicesForCategory`** — every voice that can carry a category (default = inline
+  audio; others = their `recordings` rows; ≥2 words each).
+- **Voice-scoped sessions:** `startSession` with a non-default personId uses ONLY that
+  person's recorded words (their audio overlaid on word copies) and ONLY their carrier
+  clips; missing carriers degrade to the bare word. SRS stays per-word.
+- **Face pick** in child mode when a category has >1 voice: round photo buttons, silent
+  selection, then the chosen person's intro. Default voice with no person record shows
+  a flag tile (C10).
+- **In-app voice recorder** (person edit → "🎙 Record words in X's voice"): category
+  list with progress, word-by-word stepper (photo + "Oma says: 'de lepel'", word 6s +
+  optional phrase 15s), and the game-phrase set — every recording saves immediately
+  with deterministic ids (re-record = overwrite). People list shows coverage
+  ("Ontbijt 2/5").
+- Verified locally: voice discovery, face pick UI, Oma-only session pool, recorder
+  screens, coverage display, and word-delete cascading her recording + collapsing the
+  face pick. Zero console errors.
+
+**Next:** on-phone verification of Phase B (§3.5 — record a second voice for 2–3 words
+with a silly accent and play it), then Phase C (remote recording requests via the Gist
+relay + `?record=` page + response import; read §4 and contracts C5/C6 first).
+
+**Phase A recap (v29):**
 
 - **Step ⓪ — orphaned-photo bug fixed:** `deleteWordAndCleanup(wordId)` in db.js
   deletes a word, its recordings, and its photos-store blob (only when no other word —

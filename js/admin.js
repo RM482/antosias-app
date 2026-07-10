@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup } from './db.js?v=30';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=30';
-import { startSession, initSession } from './session.js?v=30';
-import { startChildMode } from './child.js?v=30';
-import { el } from './dom.js?v=30';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=30';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=31';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=31';
+import { startSession, initSession } from './session.js?v=31';
+import { startChildMode } from './child.js?v=31';
+import { el } from './dom.js?v=31';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=31';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -1022,6 +1022,34 @@ async function renderWordEdit({ categoryId, wordId }) {
 
 // --- Settings screen -----------------------------------------------------
 
+// The carrier clips each language needs (recorded once, stitched before each
+// word in the find-it game). Dutch has article-aware prompts and an een/mass
+// correction split; Polish uses whole-phrase carriers whose wording works
+// with the bare (nominative) word. Shared by the Settings screen (parent's
+// own clips, meta store) and the per-person voice recorder (recordings store).
+const PHRASE_SPECS = {
+  nl: {
+    intro:
+      'Record these short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Trail off naturally, as if the word comes next. Leave them blank to just hear the word on its own.',
+    specs: [
+      { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
+      { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
+      { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
+      { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
+      { name: 'goed', title: 'Feedback when she gets it right — say: “Goed zo!” (well done!)' },
+    ],
+  },
+  pl: {
+    intro:
+      'Record these short clips in your own voice. The app plays them before the word during the find-it game. Choose wording that fits the plain (nominative) word — e.g. “Gdzie jest …?” and “To jest …” — and trail off naturally. Leave them blank to just hear the word on its own.',
+    specs: [
+      { name: 'prompt', title: 'Prompt — say something like: “Gdzie jest …?” (where is …?)' },
+      { name: 'correction', title: 'Correction on a wrong tap — say: “To jest …” (this is …)' },
+      { name: 'goed', title: 'Feedback when she gets it right — say: “Świetnie!” (well done!)' },
+    ],
+  },
+};
+
 function formatBackupDate(ms) {
   if (!ms) return 'never';
   return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
@@ -1111,31 +1139,6 @@ async function renderSettings() {
   screen.appendChild(card('Storage', storageChildren));
 
   // --- Standard game phrases (recorded once, reused for every word) ---
-  // The clips needed differ by language: Dutch has article-aware prompts and
-  // an een/mass correction split; Polish uses two whole-phrase carriers whose
-  // wording works with the bare (nominative) word.
-  const PHRASE_SPECS = {
-    nl: {
-      intro:
-        'Record these short clips in your own voice. During the find-it game the app plays the matching clip before the word — e.g. “Klik op de” + “banaan”. Trail off naturally, as if the word comes next. Leave them blank to just hear the word on its own.',
-      specs: [
-        { name: 'clickOnDe', title: 'Prompt for “de” words — say: “Klik op de …”' },
-        { name: 'clickOnHet', title: 'Prompt for “het” words — say: “Klik op het …”' },
-        { name: 'correctionEen', title: 'Correction for countable words — say: “Nee, dit is een …” (een mandarijn)' },
-        { name: 'correction', title: 'Correction for mass words — say: “Nee, dit is …” (brood, melk)' },
-        { name: 'goed', title: 'Feedback when she gets it right — say: “Goed zo!” (well done!)' },
-      ],
-    },
-    pl: {
-      intro:
-        'Record these short clips in your own voice. The app plays them before the word during the find-it game. Choose wording that fits the plain (nominative) word — e.g. “Gdzie jest …?” and “To jest …” — and trail off naturally. Leave them blank to just hear the word on its own.',
-      specs: [
-        { name: 'prompt', title: 'Prompt — say something like: “Gdzie jest …?” (where is …?)' },
-        { name: 'correction', title: 'Correction on a wrong tap — say: “To jest …” (this is …)' },
-        { name: 'goed', title: 'Feedback when she gets it right — say: “Świetnie!” (well done!)' },
-      ],
-    },
-  };
   const phraseConfig = PHRASE_SPECS[lang] || PHRASE_SPECS.nl;
   const phraseDraft = { ...phrases };
   const phraseBox = el('div', {});
@@ -1216,13 +1219,41 @@ async function renderPeople() {
     })
   );
   const screen = el('div', { class: 'screen' });
-  const people = await getAll('people');
+  const [people, allWords, allCategories, allRecordings] = await Promise.all([
+    getAll('people'),
+    getAll('words'),
+    getAll('categories'),
+    getAll('recordings'),
+  ]);
+  const catById = new Map(allCategories.map((c) => [c.id, c]));
+
+  // "Ontbijt 6/10 · Speelgoed 4/4" — how much of each category this person
+  // has voiced (counting only words the parent hasn't excluded).
+  function coverageLine(p) {
+    const recorded = new Set(
+      allRecordings
+        .filter((r) => r.personId === p.id && r.type === 'word' && r.audioWord)
+        .map((r) => r.wordId)
+    );
+    const perCat = new Map();
+    for (const w of allWords) {
+      if ((w.language ?? 'nl') !== p.language || w.excluded === true) continue;
+      const entry = perCat.get(w.categoryId) || { total: 0, done: 0 };
+      entry.total += 1;
+      if (recorded.has(w.id)) entry.done += 1;
+      perCat.set(w.categoryId, entry);
+    }
+    return [...perCat]
+      .filter(([, e]) => e.done > 0)
+      .map(([cid, e]) => `${(catById.get(cid) || {}).name || '?'} ${e.done}/${e.total}`)
+      .join(' · ');
+  }
 
   screen.appendChild(
     el('p', {
       class: 'settings-note',
       text:
-        'The people Antosia sees and hears in child mode: whose photo opens a session, who appears in each language’s family collage, and (soon) whose voice she can pick.',
+        'The people Antosia sees and hears in child mode: whose photo opens a session, who appears in each language’s family collage, and whose voice she can pick by tapping a face.',
     })
   );
 
@@ -1260,18 +1291,20 @@ async function renderPeople() {
         const badges = [];
         if (p.isDefaultVoice) badges.push(el('span', { class: 'badge badge-ok', text: 'Default voice' }));
         if (p.inCollage) badges.push(el('span', { class: 'badge badge-muted', text: 'In collage' }));
+        const body = [
+          el('div', { class: 'list-item-title', text: p.name || '(unnamed)' }),
+          el('div', { class: 'badge-row' }, badges),
+        ];
+        if (!p.isDefaultVoice) {
+          const coverage = coverageLine(p);
+          if (coverage) body.push(el('div', { class: 'list-item-sub', text: coverage }));
+        }
         list.appendChild(
           el('li', {}, [
             el(
               'button',
               { class: 'list-item', onclick: () => push({ screen: 'personEdit', personId: p.id }) },
-              [
-                thumb,
-                el('div', { class: 'list-item-body' }, [
-                  el('div', { class: 'list-item-title', text: p.name || '(unnamed)' }),
-                  el('div', { class: 'badge-row' }, badges),
-                ]),
-              ]
+              [thumb, el('div', { class: 'list-item-body' }, body)]
             ),
           ])
         );
@@ -1362,6 +1395,27 @@ async function renderPersonEdit({ personId }) {
     onChange: (v) => (draft.isDefaultVoice = v === 'yes'),
   });
 
+  // Voice recorder entry — for saved non-default people (the default voice
+  // already speaks through the words' own recordings). E.g. grandma visits
+  // and hands you her voice directly, no remote flow needed.
+  if (!isNew && !existing.isDefaultVoice) {
+    screen.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: `🎙 Record words in ${existing.name}'s voice`,
+        style: 'width:100%;margin-bottom:6px;',
+        onclick: () => push({ screen: 'personRecord', personId }),
+      })
+    );
+    screen.appendChild(
+      el('p', {
+        class: 'hint',
+        style: 'margin:0 0 14px;',
+        text: 'Words they record become a voice Antosia can choose by tapping their face when a session starts.',
+      })
+    );
+  }
+
   const actions = el('div', { class: 'form-actions' });
   actions.appendChild(
     el('button', {
@@ -1404,6 +1458,265 @@ async function renderPersonEdit({ personId }) {
   appEl.appendChild(screen);
 }
 
+// --- Per-person voice recorder (Stage 6 Phase B §3.4) ---------------------------
+// Every completed recording is written to the recordings store immediately
+// (crash-safe, no giant in-memory draft); deterministic ids make re-records
+// pure overwrites. Excluded ("Skip") words are left out — recording a word
+// the parent keeps out of sessions would be wasted breath.
+
+async function renderPersonRecord({ personId }) {
+  const person = await get('people', personId);
+  if (!person) {
+    pop();
+    return;
+  }
+  const lang = person.language;
+  const [allCategories, allWords, allRecordings] = await Promise.all([
+    getAll('categories'),
+    getAll('words'),
+    getAll('recordings'),
+  ]);
+  const recs = allRecordings.filter((r) => r.personId === personId);
+  const recordedWordIds = new Set(
+    recs.filter((r) => r.type === 'word' && r.audioWord).map((r) => r.wordId)
+  );
+  const specs = (PHRASE_SPECS[lang] || PHRASE_SPECS.nl).specs;
+  const carrierDone = specs.filter((s) =>
+    recs.some((r) => r.type === 'carrier' && r.language === lang && r.name === s.name && r.blob)
+  ).length;
+
+  appEl.appendChild(topbar({ title: `🎙 ${person.name}`, onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: `Pick a category and step through its words — ${person.name} says each one, you record. Every recording saves the moment it's made, so you can stop anytime and continue later.`,
+    })
+  );
+
+  const list = el('ul', { class: 'list' });
+  const categories = allCategories
+    .filter((c) => (c.language ?? 'nl') === lang)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  for (const cat of categories) {
+    const catWords = allWords.filter((w) => w.categoryId === cat.id && w.excluded !== true);
+    if (catWords.length === 0) continue;
+    const done = catWords.filter((w) => recordedWordIds.has(w.id)).length;
+    list.appendChild(
+      el('li', {}, [
+        el(
+          'button',
+          {
+            class: 'list-item',
+            onclick: () => push({ screen: 'personRecordWords', personId, categoryId: cat.id, index: 0 }),
+          },
+          [
+            el('div', { class: 'thumb', text: cat.emoji || '📁' }),
+            el('div', { class: 'list-item-body' }, [
+              el('div', { class: 'list-item-title', text: cat.name }),
+              el('div', { class: 'list-item-sub', text: `${done} of ${catWords.length} words recorded` }),
+            ]),
+            el('span', {
+              class: `badge ${done === catWords.length ? 'badge-ok' : 'badge-warning'}`,
+              text: done === catWords.length ? 'Done' : `${catWords.length - done} to go`,
+            }),
+          ]
+        ),
+      ])
+    );
+  }
+  list.appendChild(
+    el('li', {}, [
+      el(
+        'button',
+        { class: 'list-item', onclick: () => push({ screen: 'personRecordPhrases', personId }) },
+        [
+          el('div', { class: 'thumb', text: '🔊' }),
+          el('div', { class: 'list-item-body' }, [
+            el('div', { class: 'list-item-title', text: 'Game phrases' }),
+            el('div', {
+              class: 'list-item-sub',
+              text: `${carrierDone} of ${specs.length} recorded — "click on…", "well done!" etc.`,
+            }),
+          ]),
+          el('span', {
+            class: `badge ${carrierDone === specs.length ? 'badge-ok' : 'badge-warning'}`,
+            text: carrierDone === specs.length ? 'Done' : `${specs.length - carrierDone} to go`,
+          }),
+        ]
+      ),
+    ])
+  );
+  screen.appendChild(list);
+  appEl.appendChild(screen);
+}
+
+async function renderPersonRecordWords(view) {
+  const { personId, categoryId } = view;
+  const index = view.index ?? 0;
+  const [person, category, allWords] = await Promise.all([
+    get('people', personId),
+    get('categories', categoryId),
+    getAll('words'),
+  ]);
+  const words = allWords.filter((w) => w.categoryId === categoryId && w.excluded !== true);
+  if (!person || !category || words.length === 0 || index >= words.length) {
+    pop(); // finished the last word (or something was deleted meanwhile)
+    return;
+  }
+  const word = words[index];
+  await attachPhotos([word]);
+  const label = wordLabel(word);
+
+  const rowId = wordRecordingId(personId, word.id);
+  const existing = await get('recordings', rowId);
+  const draft = {
+    audioWord: existing?.audioWord || null,
+    audioPhrase: existing?.audioPhrase || null,
+  };
+  async function saveRow() {
+    try {
+      await put('recordings', {
+        id: rowId,
+        personId,
+        type: 'word',
+        wordId: word.id,
+        audioWord: draft.audioWord,
+        audioPhrase: draft.audioPhrase || null,
+        updatedAt: Date.now(),
+      });
+    } catch (err) {
+      alert(`Could not save the recording: ${errText(err)}`);
+    }
+  }
+
+  appEl.appendChild(
+    topbar({ title: `${category.emoji} ${index + 1} / ${words.length}`, onBack: () => pop() })
+  );
+  const screen = el('div', { class: 'screen' });
+
+  const thumb = el('div', { class: 'thumb large', style: 'margin:0 auto 10px;' });
+  if (word.photo) {
+    const img = el('img', { alt: '' });
+    img.src = URL.createObjectURL(word.photo);
+    thumb.appendChild(img);
+  } else {
+    thumb.textContent = word.placeholderEmoji || '🔤';
+  }
+  screen.appendChild(thumb);
+  screen.appendChild(
+    el('div', { class: 'label-preview', style: 'text-align:center;margin-bottom:14px;', text: label })
+  );
+
+  buildAudioControl(screen, {
+    title: `${person.name} says: “${label}”`,
+    maxMs: 6000,
+    getBlob: () => draft.audioWord,
+    setBlob: (b) => {
+      draft.audioWord = b;
+      saveRow();
+    },
+    required: false,
+  });
+
+  if (word.phraseText) {
+    buildAudioControl(screen, {
+      title: `Optional phrase — “${word.phraseText}”`,
+      maxMs: 15000,
+      getBlob: () => draft.audioPhrase,
+      setBlob: (b) => {
+        draft.audioPhrase = b;
+        saveRow();
+      },
+      required: false,
+    });
+  }
+
+  // Stepper: mutate this view's index in place and re-render, so Back still
+  // pops to the category list in one step no matter how far she got.
+  const nav = el('div', { class: 'form-actions' });
+  const isLast = index === words.length - 1;
+  nav.appendChild(
+    el('button', {
+      text: isLast ? 'Done' : 'Next word ›',
+      onclick: () => {
+        if (isLast) {
+          pop();
+        } else {
+          view.index = index + 1;
+          render();
+        }
+      },
+    })
+  );
+  if (index > 0) {
+    nav.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: '‹ Previous word',
+        onclick: () => {
+          view.index = index - 1;
+          render();
+        },
+      })
+    );
+  }
+  screen.appendChild(nav);
+  appEl.appendChild(screen);
+}
+
+async function renderPersonRecordPhrases({ personId }) {
+  const person = await get('people', personId);
+  if (!person) {
+    pop();
+    return;
+  }
+  const lang = person.language;
+  const config = PHRASE_SPECS[lang] || PHRASE_SPECS.nl;
+  const allRecordings = await getAll('recordings');
+  const draft = {};
+  for (const spec of config.specs) {
+    const row = allRecordings.find(
+      (r) => r.id === carrierRecordingId(personId, lang, spec.name)
+    );
+    draft[spec.name] = (row && row.blob) || null;
+  }
+
+  appEl.appendChild(topbar({ title: `🔊 ${person.name}'s game phrases`, onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: `${config.intro} These are in ${person.name}'s voice — a phrase they skip just plays the bare word in their sessions.`,
+    })
+  );
+  for (const spec of config.specs) {
+    buildAudioControl(screen, {
+      title: spec.title,
+      maxMs: 5000,
+      getBlob: () => draft[spec.name],
+      setBlob: async (b) => {
+        draft[spec.name] = b;
+        try {
+          await put('recordings', {
+            id: carrierRecordingId(personId, lang, spec.name),
+            personId,
+            type: 'carrier',
+            language: lang,
+            name: spec.name,
+            blob: b,
+            updatedAt: Date.now(),
+          });
+        } catch (err) {
+          alert(`Could not save the recording: ${errText(err)}`);
+        }
+      },
+      required: false,
+    });
+  }
+  appEl.appendChild(screen);
+}
+
 // --- Render dispatch + init -----------------------------------------------------
 
 async function render() {
@@ -1416,6 +1729,9 @@ async function render() {
   if (view.screen === 'settings') return renderSettings();
   if (view.screen === 'people') return renderPeople();
   if (view.screen === 'personEdit') return renderPersonEdit(view);
+  if (view.screen === 'personRecord') return renderPersonRecord(view);
+  if (view.screen === 'personRecordWords') return renderPersonRecordWords(view);
+  if (view.screen === 'personRecordPhrases') return renderPersonRecordPhrases(view);
 }
 
 // Shared "back to the admin home screen" used by both exits from the #session
