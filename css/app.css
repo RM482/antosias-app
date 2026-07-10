@@ -877,6 +877,170 @@ p {
   object-fit: cover;
 }
 
+/* --- Family recording page (?record=…) ---
+   Audience: grandparents who may never have recorded anything on a phone.
+   Everything is oversized: one task per screen, one huge obvious button. */
+
+.record-page {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  text-align: center;
+}
+
+.record-title {
+  font-size: 1.7rem;
+  margin: 10px 0 14px;
+}
+
+.record-body {
+  font-size: 1.15rem;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+
+.record-warn {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  background: #f7e2c4;
+  color: #6d4715;
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: 16px 0;
+}
+
+.record-tips {
+  text-align: left;
+  font-size: 1.1rem;
+  line-height: 1.5;
+  padding-left: 1.2em;
+  margin: 12px 0;
+}
+
+.record-tips li {
+  margin: 10px 0;
+}
+
+.record-progress {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.record-instruction {
+  font-size: 1.15rem;
+  margin: 12px 0 6px;
+}
+
+.record-say {
+  font-size: 2rem;
+  font-weight: 800;
+  margin: 6px 0 10px;
+}
+
+.record-hint {
+  font-size: 1rem;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 6px 0 10px;
+}
+
+.record-thumb {
+  width: 160px;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 20px;
+  margin: 4px auto 8px;
+  display: block;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+
+.record-status {
+  font-size: 1.2rem;
+  font-weight: 700;
+  min-height: 1.5em;
+  margin: 10px 0;
+}
+
+.record-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+/* THE button: a big red microphone circle nobody can miss. */
+.record-btn {
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: #cc3b2f;
+  font-size: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.record-btn.recording {
+  font-size: 1.4rem;
+  animation: record-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes record-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 6px 18px rgba(204, 59, 47, 0.35);
+  }
+  50% {
+    transform: scale(1.07);
+    box-shadow: 0 6px 26px rgba(204, 59, 47, 0.6);
+  }
+}
+
+.record-primary {
+  width: 100%;
+  font-size: 1.3rem;
+  padding: 18px;
+  border-radius: 18px;
+}
+
+.record-start {
+  margin-top: 14px;
+}
+
+.record-secondary {
+  width: 100%;
+  font-size: 1.15rem;
+  padding: 15px;
+  border-radius: 16px;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 2px solid var(--border);
+}
+
+.record-skip {
+  background: none;
+  color: var(--muted);
+  font-size: 1rem;
+  text-decoration: underline;
+  box-shadow: none;
+  min-height: 44px;
+}
+
+.record-photo-preview img {
+  width: 180px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 50%;
+  margin: 10px auto;
+  display: block;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+}
+
 /* --- Home-screen language switcher --- */
 .lang-switch {
   display: flex;

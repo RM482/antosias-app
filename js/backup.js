@@ -1,4 +1,5 @@
-import { getAll, putAllTransactional } from './db.js?v=31';
+import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=31';
+import { canDecodeAudio } from './media.js?v=31';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
@@ -13,7 +14,7 @@ import { getAll, putAllTransactional } from './db.js?v=31';
 // missing sections just default to empty.
 const SUPPORTED_FORMAT_VERSIONS = [1, 2, 3];
 
-function blobToDataUrl(blob) {
+export function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -95,12 +96,19 @@ export async function exportAndShare({ warnLargeShare = false } = {}) {
     );
     if (!proceed) return { method: 'cancelled', sizeMB };
   }
+  return shareJsonFile({ json, filename: 'antosias-app-export.json', title: "Antosia's app export", sizeMB });
+}
+
+// Offers a JSON file through the native share sheet (AirDrop/WhatsApp/etc. on
+// phones), falling back to a plain download. Shared by backups, recording
+// requests, and the family recording page's "send back" step.
+export async function shareJsonFile({ json, filename, title, sizeMB = null }) {
   const blob = new Blob([json], { type: 'application/json' });
-  const file = new File([blob], 'antosias-app-export.json', { type: 'application/json' });
+  const file = new File([blob], filename, { type: 'application/json' });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: "Antosia's app export" });
+      await navigator.share({ files: [file], title });
       return { method: 'share', sizeMB };
     } catch (err) {
       if (err.name === 'AbortError') return { method: 'cancelled', sizeMB };
@@ -111,7 +119,7 @@ export async function exportAndShare({ warnLargeShare = false } = {}) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'antosias-app-export.json';
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -205,7 +213,9 @@ export async function importPayload(payload) {
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public
 // API, with no auth needed — that's what makes an unlisted link work.
-export async function importFromGist(gistId) {
+// Returns the raw file TEXT (callers parse it themselves — the recording
+// page checks size limits on the raw text before JSON.parse).
+export async function fetchGistText(gistId) {
   const res = await fetch(`https://api.github.com/gists/${gistId}`);
   if (!res.ok) throw new Error(`Could not load shared data (status ${res.status})`);
   const gist = await res.json();
@@ -220,7 +230,139 @@ export async function importFromGist(gistId) {
     if (!rawRes.ok) throw new Error(`Could not load shared data file (status ${rawRes.status})`);
     text = await rawRes.text();
   }
+  return text;
+}
 
-  const payload = JSON.parse(text);
+export async function importFromGist(gistId) {
+  const payload = JSON.parse(await fetchGistText(gistId));
   await importPayload(payload);
+}
+
+// --- Family recording responses (Stage 6 Phase C) -------------------------------
+// Two stages so the UI can put its confirm dialogs in between:
+// analyzeRecordingResponse validates + decodes + decode-checks EVERYTHING
+// without touching the database; applyRecordingResponse then writes the
+// person + recordings in one transaction (contracts C3/C6).
+
+export async function analyzeRecordingResponse(payload) {
+  if (!payload || typeof payload !== 'object' || payload.formatVersion !== 'recording-response-1') {
+    throw new Error('This file is not a family recording response from this app.');
+  }
+  if (typeof payload.personName !== 'string' || !payload.personName.trim()) {
+    throw new Error('This recording file is damaged (no person name).');
+  }
+  const language = payload.language === 'pl' ? 'pl' : 'nl';
+  const personName = payload.personName.trim();
+
+  const [words, people] = await Promise.all([getAll('words'), getAll('people')]);
+  const wordById = new Map(words.map((w) => [w.id, w]));
+  const existingPerson =
+    people.find(
+      (p) => p.language === language && (p.name || '').trim().toLowerCase() === personName.toLowerCase()
+    ) || null;
+
+  const unplayable = []; // labels of clips this phone can't decode
+  const skippedWordIds = []; // recorded for words deleted since the request
+  const wordRows = [];
+  for (const item of payload.words || []) {
+    if (!item || typeof item.wordId !== 'string' || typeof item.audioWord !== 'string') continue;
+    const word = wordById.get(item.wordId);
+    if (!word) {
+      skippedWordIds.push(item.wordId);
+      continue;
+    }
+    const audioWord = await dataUrlToBlob(item.audioWord);
+    if (!(await canDecodeAudio(audioWord))) {
+      unplayable.push(wordLabel(word) || word.word);
+      continue;
+    }
+    let audioPhrase = null;
+    if (typeof item.audioPhrase === 'string') {
+      audioPhrase = await dataUrlToBlob(item.audioPhrase);
+      if (!(await canDecodeAudio(audioPhrase))) audioPhrase = null; // keep the word, drop the phrase
+    }
+    wordRows.push({ wordId: item.wordId, audioWord, audioPhrase });
+  }
+
+  const carrierRows = [];
+  for (const item of payload.carriers || []) {
+    if (!item || typeof item.name !== 'string' || typeof item.blob !== 'string') continue;
+    const blob = await dataUrlToBlob(item.blob);
+    if (!(await canDecodeAudio(blob))) {
+      unplayable.push(`game phrase "${item.name}"`);
+      continue;
+    }
+    carrierRows.push({ name: item.name, blob });
+  }
+
+  let personPhoto = null;
+  if (typeof payload.personPhoto === 'string') personPhoto = await dataUrlToBlob(payload.personPhoto);
+  let introAudio = null;
+  if (typeof payload.introAudio === 'string') {
+    introAudio = await dataUrlToBlob(payload.introAudio);
+    if (!(await canDecodeAudio(introAudio))) {
+      unplayable.push('the intro clip');
+      introAudio = null;
+    }
+  }
+
+  return {
+    language,
+    personName,
+    existingPerson,
+    personPhoto,
+    introAudio,
+    wordRows,
+    carrierRows,
+    unplayable,
+    skippedCount: skippedWordIds.length,
+  };
+}
+
+export async function applyRecordingResponse(analysis) {
+  const now = Date.now();
+  const base = analysis.existingPerson;
+  // Contract C6: a null photo/intro in the response never wipes an existing one.
+  const person = base
+    ? {
+        ...base,
+        photo: analysis.personPhoto || base.photo,
+        introAudio: analysis.introAudio || base.introAudio,
+        updatedAt: now,
+      }
+    : {
+        id: newId(),
+        name: analysis.personName,
+        language: analysis.language,
+        photo: analysis.personPhoto,
+        introAudio: analysis.introAudio,
+        inCollage: true,
+        isDefaultVoice: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+  const recordings = [
+    ...analysis.wordRows.map((r) => ({
+      id: wordRecordingId(person.id, r.wordId),
+      personId: person.id,
+      type: 'word',
+      wordId: r.wordId,
+      audioWord: r.audioWord,
+      audioPhrase: r.audioPhrase,
+      updatedAt: now,
+    })),
+    ...analysis.carrierRows.map((r) => ({
+      id: carrierRecordingId(person.id, analysis.language, r.name),
+      personId: person.id,
+      type: 'carrier',
+      language: analysis.language,
+      name: r.name,
+      blob: r.blob,
+      updatedAt: now,
+    })),
+  ];
+
+  await putAllTransactional({ people: [person], recordings });
+  return { person, words: analysis.wordRows.length, carriers: analysis.carrierRows.length };
 }

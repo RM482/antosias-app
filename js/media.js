@@ -216,6 +216,25 @@ async function decodeBlob(ctx, blob) {
   return buffer;
 }
 
+// Can this device actually decode (and therefore play) the clip? Used by the
+// family-recordings import to keep unplayable audio out of the database —
+// e.g. an Android phone records webm/opus, which older iOS Safari can't play.
+// Decodes a copy; the blob itself is untouched.
+export async function canDecodeAudio(blob) {
+  const ctx = getAudioContext();
+  if (!ctx) return true; // nothing to check with — let it through
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    await new Promise((resolve, reject) => {
+      const p = ctx.decodeAudioData(arrayBuffer, resolve, reject);
+      if (p && p.then) p.then(resolve, reject);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Find the speech span within a clip by trimming leading/trailing near-silence,
 // keeping a small guard margin so we don't clip the very edges of the sound.
 // Returns { offset, duration } in seconds for AudioBufferSourceNode.start().

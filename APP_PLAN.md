@@ -1,6 +1,60 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, later) — live app `?v=31`
+## Status (as of 10 July 2026, evening) — live app `?v=31`; Phase C committed locally, NOT deployed
+
+**⏭️ NEXT SESSION — finish Phase C verification, then deploy.** Phase C (remote
+recording requests) is fully written and committed on `main` locally but deliberately
+NOT pushed: the live phone app is still the verified v31. What's in the local commit:
+
+- **`js/record.js` (new):** the family member's recording page (`?record=<gistId>`),
+  built for technically-inept elderly relatives — one task per screen, one giant
+  button, everything spelled out. Fully localized nl + pl (parent picks the
+  instructions language per request, independent of the word language). Includes the
+  parent-requested recording tips: start speaking immediately (no pause), happy /
+  question intonation hints per phrase type, and "personalizing is welcome —
+   'Goed zo, Antosia!'". Never touches IndexedDB (contract C5). Wizard: greeting →
+  tips → intro clip → selfie → words (word + optional phrase steps) → game phrases →
+  send-back (share sheet, download fallback with instructions). Polish plural grammar
+  handled (1 nagranie / 2–4 nagrania / 5+ nagrań).
+- **admin.js:** `?record=` routes as the FIRST statement of the startup IIFE (C5);
+  person editor gains "📋 Create recording request" (category checkboxes, instructions
+  language, phrases/intro toggles, ≤200px thumbs, privacy warning, share + publish
+  instructions alert); Settings → People card gains "📥 Import family recordings".
+- **backup.js:** `fetchGistText`/`blobToDataUrl`/`shareJsonFile` extracted;
+  `analyzeRecordingResponse` (validate → decode → per-clip `canDecodeAudio` playability
+  check → match person by name+language, nothing written) +
+  `applyRecordingResponse` (one transaction; C6 null-protection; deterministic ids →
+  re-import idempotent). **media.js:** `canDecodeAudio`.
+- Recorder bugs already found & fixed via browser testing: Stop tapped before the mic
+  was ready did nothing; UI said "speak now!" while the permission prompt was still
+  up (now a calm "one moment…" until capture truly starts); mic-denied message was
+  being overwritten.
+
+**Verified so far (desktop browser):** full wizard walk in Dutch AND Polish (greeting,
+tips with all requested guidance, intro/photo/word/phrase/carrier/send screens, skip
+paths, thumbnails, progress counter). **Still to do before deploying:**
+1. Test the import pipeline in the browser: `analyzeRecordingResponse` +
+   `applyRecordingResponse` with real WAV clips + one undecodable clip (unplayable
+   list) + one deleted wordId (skipped count); import twice → idempotent; C6:
+   response with null photo must not wipe an existing photo.
+2. Render-test the request-builder screen (person edit → "📋 Create recording
+   request") and create a file end-to-end.
+3. Confirm normal admin startup is unaffected by the new `?record=` routing (load the
+   app, check console for errors).
+4. Then: `sed` bump `?v=31` → `?v=32` in index.html + js/*.js, `node --check js/*.js`,
+   commit, push (= deploy), and run the §4.4 on-phone checklist (fresh-profile
+   `?record=` link must not create a database; real request → record on a second
+   device → send back → import; re-import no duplicates; Android codec test before
+   asking the whole family).
+
+**Phase C flow reminder (for the parent):** build request in app → AirDrop file to
+Mac → `~/.local/bin/gh gist create <file>` → send
+`https://rm482.github.io/antosias-app/?record=<gistId>` via WhatsApp → they record →
+they send a file back → Settings → "📥 Import family recordings".
+
+---
+
+## Previous status (10 July 2026, midday) — shipped as v31
 
 **Stage 6 Phases A AND B are implemented and deployed.** Phase A shipped as v29 and is
 in real use. v30 fixed two real-use reports: (1) the category rename finally works on

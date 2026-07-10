@@ -3,7 +3,7 @@ import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v
 import { startSession, initSession } from './session.js?v=31';
 import { startChildMode } from './child.js?v=31';
 import { el } from './dom.js?v=31';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=31';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=31';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -1069,6 +1069,50 @@ async function renderSettings() {
   const phrases = await getStandardPhrases(lang);
 
   // --- People & voices (Stage 6) ---
+  // Import of a family member's recording response (the file they send back
+  // after recording at home via a ?record= link). Analysis (validate, decode,
+  // per-clip playability check) happens before any confirm; nothing is
+  // written until the parent approves.
+  const importRecordingsInput = el('input', { type: 'file', accept: 'application/json,.json', hidden: '' });
+  importRecordingsInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      let payload;
+      try {
+        payload = JSON.parse(await file.text());
+      } catch {
+        throw new Error('That file is not readable — make sure it is the file they sent back.');
+      }
+      const analysis = await analyzeRecordingResponse(payload);
+      if (analysis.unplayable.length > 0) {
+        const proceed = confirm(
+          `${analysis.unplayable.length} clip${analysis.unplayable.length === 1 ? '' : 's'} can't play on this phone (${analysis.unplayable.join(', ')}) — probably recorded on an Android device in a format iPhones can't play. Import the rest?`
+        );
+        if (!proceed) return;
+      }
+      const usable = analysis.wordRows.length + analysis.carrierRows.length;
+      if (usable === 0 && !analysis.introAudio && !analysis.personPhoto) {
+        alert('Nothing usable in this file — no playable recordings found.');
+        return;
+      }
+      const summaryBits = `${analysis.wordRows.length} word recording${analysis.wordRows.length === 1 ? '' : 's'} and ${analysis.carrierRows.length} game phrase${analysis.carrierRows.length === 1 ? '' : 's'}`;
+      const question = analysis.existingPerson
+        ? `Add ${summaryBits} to "${analysis.existingPerson.name}"? Existing recordings of the same words are replaced by these.`
+        : `Add new person "${analysis.personName}" with ${summaryBits}?`;
+      if (!confirm(question)) return;
+      const result = await applyRecordingResponse(analysis);
+      const skippedNote = analysis.skippedCount
+        ? ` ${analysis.skippedCount} recording${analysis.skippedCount === 1 ? ' was' : 's were'} for words you've deleted — skipped.`
+        : '';
+      alert(`Imported ${result.words} word recordings and ${result.carriers} game phrases for ${result.person.name}.${skippedNote}`);
+      render();
+    } catch (err) {
+      alert(`Import failed: ${errText(err)}`);
+    }
+  });
+
   screen.appendChild(
     card('👪 People & voices', [
       el('p', {
@@ -1078,9 +1122,16 @@ async function renderSettings() {
       el('button', {
         class: 'btn-secondary',
         text: 'Manage people',
-        style: 'width:100%;',
+        style: 'width:100%;margin-bottom:8px;',
         onclick: () => push({ screen: 'people' }),
       }),
+      el('button', {
+        class: 'btn-secondary',
+        text: '📥 Import family recordings',
+        style: 'width:100%;',
+        onclick: () => importRecordingsInput.click(),
+      }),
+      importRecordingsInput,
     ])
   );
 
@@ -1408,6 +1459,14 @@ async function renderPersonEdit({ personId }) {
       })
     );
     screen.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: '📋 Create recording request (they record at home)',
+        style: 'width:100%;margin-bottom:6px;',
+        onclick: () => push({ screen: 'personRequest', personId }),
+      })
+    );
+    screen.appendChild(
       el('p', {
         class: 'hint',
         style: 'margin:0 0 14px;',
@@ -1717,6 +1776,177 @@ async function renderPersonRecordPhrases({ personId }) {
   appEl.appendChild(screen);
 }
 
+// --- Recording requests (Stage 6 Phase C §4.1) -----------------------------------
+// What each carrier asks the family member to SAY (in the request's language).
+// The `type` picks the localized intonation hint on the recording page
+// (prompt = trail off like a little task; correction = kind, unfinished;
+// goed = happy and proud).
+
+const REQUEST_CARRIERS = {
+  nl: [
+    { name: 'clickOnDe', say: 'Klik op de …', type: 'prompt' },
+    { name: 'clickOnHet', say: 'Klik op het …', type: 'prompt' },
+    { name: 'correctionEen', say: 'Nee, dit is een …', type: 'correction' },
+    { name: 'correction', say: 'Nee, dit is …', type: 'correction' },
+    { name: 'goed', say: 'Goed zo!', type: 'goed' },
+  ],
+  pl: [
+    { name: 'prompt', say: 'Gdzie jest …?', type: 'prompt' },
+    { name: 'correction', say: 'To jest …', type: 'correction' },
+    { name: 'goed', say: 'Świetnie!', type: 'goed' },
+  ],
+};
+
+async function renderPersonRequest({ personId }) {
+  const person = await get('people', personId);
+  if (!person) {
+    pop();
+    return;
+  }
+  const lang = person.language;
+  const [allCategories, allWords] = await Promise.all([getAll('categories'), getAll('words')]);
+  const categories = allCategories
+    .filter((c) => (c.language ?? 'nl') === lang)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const wordsFor = (catId) => allWords.filter((w) => w.categoryId === catId && w.excluded !== true);
+
+  const state = {
+    checked: new Set(categories.filter((c) => wordsFor(c.id).length > 0).map((c) => c.id)),
+    includePhrases: true,
+    includeIntro: true,
+    uiLanguage: lang, // language of the instructions the family member reads
+  };
+
+  appEl.appendChild(topbar({ title: `📋 Request for ${person.name}`, onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: `Builds a file you publish as a link. ${person.name} opens the link on their own phone, records everything right in the browser (no app install), and sends you back a file to import here.`,
+    })
+  );
+
+  screen.appendChild(el('div', { class: 'field-label', text: 'Words to ask for' }));
+  const catList = el('div', { style: 'margin-bottom:16px;' });
+  for (const cat of categories) {
+    const count = wordsFor(cat.id).length;
+    if (count === 0) continue;
+    const btn = el('button', {
+      type: 'button',
+      class: 'btn-secondary',
+      style: 'width:100%;margin-bottom:8px;text-align:left;justify-content:flex-start;',
+    });
+    const refresh = () => {
+      btn.textContent = `${state.checked.has(cat.id) ? '☑' : '☐'} ${cat.emoji} ${cat.name} (${count} word${count === 1 ? '' : 's'})`;
+    };
+    btn.addEventListener('click', () => {
+      if (state.checked.has(cat.id)) state.checked.delete(cat.id);
+      else state.checked.add(cat.id);
+      refresh();
+    });
+    refresh();
+    catList.appendChild(btn);
+  }
+  screen.appendChild(catList);
+
+  buildSegmented(screen, {
+    label: 'Language of the instructions they read',
+    options: LANGUAGES.map((l) => ({ label: `${l.flag} ${l.label}`, value: l.code })),
+    value: state.uiLanguage,
+    onChange: (v) => (state.uiLanguage = v),
+  });
+
+  buildSegmented(screen, {
+    label: 'Also ask for the game phrases ("click on…", "well done!")',
+    options: [
+      { label: 'Yes', value: 'yes' },
+      { label: 'No', value: 'no' },
+    ],
+    value: 'yes',
+    onChange: (v) => (state.includePhrases = v === 'yes'),
+  });
+
+  buildSegmented(screen, {
+    label: `Also ask for the intro ("${lang === 'nl' ? 'Nederlands!' : 'Polski!'}") and a photo`,
+    options: [
+      { label: 'Yes', value: 'yes' },
+      { label: 'No', value: 'no' },
+    ],
+    value: 'yes',
+    onChange: (v) => (state.includeIntro = v === 'yes'),
+  });
+
+  screen.appendChild(
+    el('button', {
+      text: '📤 Create request file',
+      style: 'width:100%;margin-top:8px;',
+      onclick: async (e) => {
+        const words = [...state.checked].flatMap((catId) => wordsFor(catId));
+        if (words.length === 0) {
+          alert('Pick at least one category with words.');
+          return;
+        }
+        if (
+          !confirm(
+            'Heads up: the request link is unlisted but not private — anyone who has the exact link can see the word photos in it. Share it only with the person recording. Continue?'
+          )
+        )
+          return;
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Preparing…';
+        try {
+          await attachPhotos(words);
+          const items = [];
+          for (const w of words) {
+            let thumb = null;
+            if (w.photo) {
+              // Small context picture for the reader; keeps a 30-word request
+              // comfortably inside the Gist limits.
+              thumb = await blobToDataUrl(await downscaleImage(w.photo, 200, 0.6));
+            }
+            items.push({
+              wordId: w.id,
+              label: wordLabel(w),
+              word: w.word,
+              phraseText: w.phraseText || '',
+              thumb,
+            });
+          }
+          const payload = {
+            formatVersion: 'recording-request-1',
+            language: lang,
+            uiLanguage: state.uiLanguage,
+            appName: "Antosia's app",
+            personName: person.name,
+            words: items,
+            carriers: state.includePhrases ? REQUEST_CARRIERS[lang] || [] : [],
+            includeIntro: state.includeIntro,
+          };
+          const safeName = person.name.replace(/[^\p{L}\p{N}]+/gu, '-').toLowerCase();
+          const { method } = await shareJsonFile({
+            json: JSON.stringify(payload),
+            filename: `antosia-verzoek-${safeName}.json`,
+            title: "Antosia's app recording request",
+          });
+          if (method !== 'cancelled') {
+            alert(
+              `Request file created. Now:\n\n1. Get the file to your Mac (AirDrop is easiest).\n2. In Terminal: ~/.local/bin/gh gist create <the file>\n3. Send ${person.name} this link on WhatsApp:\nhttps://rm482.github.io/antosias-app/?record=<the gist id from step 2>\n\nWhen the recordings come back as a file, use "Import family recordings" in Settings.`
+            );
+          }
+        } catch (err) {
+          alert(`Could not create the request: ${errText(err)}`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '📤 Create request file';
+        }
+      },
+    })
+  );
+
+  appEl.appendChild(screen);
+}
+
 // --- Render dispatch + init -----------------------------------------------------
 
 async function render() {
@@ -1732,6 +1962,7 @@ async function render() {
   if (view.screen === 'personRecord') return renderPersonRecord(view);
   if (view.screen === 'personRecordWords') return renderPersonRecordWords(view);
   if (view.screen === 'personRecordPhrases') return renderPersonRecordPhrases(view);
+  if (view.screen === 'personRequest') return renderPersonRequest(view);
 }
 
 // Shared "back to the admin home screen" used by both exits from the #session
@@ -1754,6 +1985,16 @@ function errText(err) {
 }
 
 (async () => {
+  // Contract C5: a family member opening a ?record= link gets the recording
+  // page BEFORE any database access — record.js never opens IndexedDB, and
+  // no seed/settings/migration code may run first (their browser must stay a
+  // blank slate for a possible later first-open of the real app).
+  const recordGistId = new URLSearchParams(location.search).get('record');
+  if (recordGistId) {
+    const { startRecordingPage } = await import('./record.js?v=31');
+    startRecordingPage(recordGistId);
+    return;
+  }
   try {
     const sharedGistId = new URLSearchParams(location.search).get('shared');
     const alreadySeeded = await get('meta', 'seeded');
