@@ -162,7 +162,36 @@ export function unlockAudio() {
   if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
 }
 
+// --- Single-playback rule -----------------------------------------------------
+// Only one sound ever plays at a time (overlapping clips genuinely confused
+// the toddler). Every playBlobSequence call carries a `key` naming what it
+// is (e.g. 'prompt:<wordId>'). Starting a DIFFERENT sound cuts the current
+// one off; re-triggering the SAME key while it plays is ignored so the clip
+// finishes naturally instead of stacking or restarting.
+let activeSequence = null; // { key, sources, element, cancelled, settle }
+
+export function stopPlayback() {
+  const seq = activeSequence;
+  if (!seq) return;
+  activeSequence = null;
+  seq.cancelled = true;
+  for (const src of seq.sources) {
+    try {
+      src.onended = null;
+      src.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+  if (seq.element) {
+    seq.element.pause();
+    seq.element.src = '';
+  }
+  seq.settle({ cancelled: true });
+}
+
 export function playBlob(blob) {
+  stopPlayback(); // previews obey the one-sound rule too
   const audio = getSharedAudioElement();
   const url = URL.createObjectURL(blob);
   audio.src = url;
@@ -208,16 +237,39 @@ function speechSpan(buffer, threshold = 0.02, guardSec = 0.03) {
 // Web Audio API to schedule the clips back-to-back with sample-accurate timing
 // and trimmed silence, so there's no reload gap between them. Falls back to the
 // simple <audio> element player if Web Audio or decoding isn't available.
-// Falsy entries are skipped. Resolves once the last clip ends.
-export async function playBlobSequence(blobs) {
+// Falsy entries are skipped.
+//
+// Enforces the single-playback rule (see stopPlayback above) via `key`.
+// Resolves with { completed: true } when the last clip finished,
+// { cancelled: true } when a different sound cut this one off, or
+// { duplicate: true } when this key was already playing (nothing started).
+// Callers chaining follow-up audio should bail unless `completed`.
+export async function playBlobSequence(blobs, { key = null } = {}) {
   const queue = blobs.filter(Boolean);
-  if (queue.length === 0) return;
+  if (queue.length === 0) return { completed: true };
+
+  if (activeSequence && key != null && activeSequence.key === key) {
+    return { duplicate: true }; // same sound already playing — let it finish
+  }
+  stopPlayback();
+
+  // Register before any await so a competing call can cancel us mid-decode.
+  const seq = { key, sources: [], element: null, cancelled: false, settle: null };
+  const done = new Promise((resolve) => {
+    seq.settle = resolve; // resolves at most once; later calls are no-ops
+  });
+  activeSequence = seq;
+  const finish = () => {
+    if (activeSequence === seq) activeSequence = null;
+    seq.settle({ completed: true });
+  };
 
   const ctx = getAudioContext();
   if (ctx) {
     try {
       if (ctx.state === 'suspended') await ctx.resume();
       const buffers = await Promise.all(queue.map((b) => decodeBlob(ctx, b)));
+      if (seq.cancelled) return done;
       let when = ctx.currentTime + 0.03; // tiny lead-in so scheduling is reliable
       let last = null;
       for (const buffer of buffers) {
@@ -227,43 +279,47 @@ export async function playBlobSequence(blobs) {
         src.connect(ctx.destination);
         src.start(when, offset, duration);
         when += duration; // next clip begins exactly as this one's speech ends
+        seq.sources.push(src);
         last = src;
       }
-      return await new Promise((resolve) => {
-        if (last) last.onended = () => resolve();
-        else resolve();
-      });
+      if (last) last.onended = finish;
+      else finish();
+      return done;
     } catch {
       // Fall through to the element-based player below.
     }
   }
-  return playBlobSequenceViaElement(queue);
+  if (seq.cancelled) return done;
+  playBlobSequenceViaElement(queue, seq, finish);
+  return done;
 }
 
 // Fallback: sequential playback on the shared <audio> element (has an audible
-// gap between clips, but always works).
-function playBlobSequenceViaElement(queue) {
+// gap between clips, but always works). Checks seq.cancelled between clips so
+// a cut-off can't keep the chain going.
+function playBlobSequenceViaElement(queue, seq, finish) {
   const audio = getSharedAudioElement();
-  return new Promise((resolve, reject) => {
-    let i = 0;
-    function playNext() {
-      if (i >= queue.length) {
-        resolve();
-        return;
-      }
-      const url = URL.createObjectURL(queue[i++]);
-      const onEnded = () => {
-        URL.revokeObjectURL(url);
-        audio.removeEventListener('ended', onEnded);
-        playNext();
-      };
-      audio.addEventListener('ended', onEnded, { once: true });
-      audio.src = url;
-      audio.play().catch((err) => {
-        audio.removeEventListener('ended', onEnded);
-        reject(err);
-      });
+  seq.element = audio;
+  let i = 0;
+  function playNext() {
+    if (seq.cancelled) return;
+    if (i >= queue.length) {
+      finish();
+      return;
     }
-    playNext();
-  });
+    const url = URL.createObjectURL(queue[i++]);
+    const onEnded = () => {
+      URL.revokeObjectURL(url);
+      audio.removeEventListener('ended', onEnded);
+      playNext();
+    };
+    audio.addEventListener('ended', onEnded, { once: true });
+    audio.src = url;
+    audio.play().catch(() => {
+      audio.removeEventListener('ended', onEnded);
+      // Treat an unplayable clip like a finished one so callers still settle.
+      if (!seq.cancelled) finish();
+    });
+  }
+  playNext();
 }

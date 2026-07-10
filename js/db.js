@@ -555,24 +555,29 @@ export async function ensureSeeded(language = 'nl') {
 }
 
 // One-time rename of the three seeded Dutch categories from their original
-// English names to Dutch ones. Runs at most once (guarded by a meta marker),
-// and only rewrites a category whose name still EXACTLY matches the old
-// English default — so a category the parent renamed themselves is left
-// untouched. Only the name field changes; ids, words, photos are all
-// unaffected.
-const NL_CATEGORY_RENAMES = {
-  'nl-cat-breakfast': { from: 'Breakfast', to: 'Ontbijt' },
-  'nl-cat-clothes': { from: 'Clothes', to: 'Kleren' },
-  'nl-cat-toys': { from: 'Toys / play', to: 'Speelgoed' },
+// English names to Dutch ones. Only rewrites a category whose name still
+// EXACTLY matches the old English default — so a category the parent renamed
+// themselves is left untouched. Only the name field changes; ids, words,
+// photos are all unaffected.
+//
+// This is pass v2: the first pass (v1, shipped in ?v=28) looked categories up
+// by the multi-language ids (nl-cat-…), but phones seeded before Stage 5
+// still carry the original unprefixed ids (cat-…), so nothing matched — and
+// the done-marker was written anyway, so it never retried. Matching by NAME
+// works for both id generations.
+const NL_CATEGORY_RENAMES_BY_NAME = {
+  Breakfast: 'Ontbijt',
+  Clothes: 'Kleren',
+  'Toys / play': 'Speelgoed',
 };
 
 export async function migrateDutchCategoryNames() {
-  if (await get('meta', 'migrate:nl-cat-names:v1')) return;
-  for (const [id, { from, to }] of Object.entries(NL_CATEGORY_RENAMES)) {
-    const cat = await get('categories', id);
-    if (cat && cat.name === from) {
-      await put('categories', { ...cat, name: to });
-    }
+  if (await get('meta', 'migrate:nl-cat-names:v2')) return;
+  const cats = await getAll('categories');
+  for (const cat of cats) {
+    if ((cat.language ?? 'nl') !== 'nl') continue;
+    const to = NL_CATEGORY_RENAMES_BY_NAME[cat.name];
+    if (to) await put('categories', { ...cat, name: to });
   }
-  await put('meta', { key: 'migrate:nl-cat-names:v1', value: true });
+  await put('meta', { key: 'migrate:nl-cat-names:v2', value: true });
 }

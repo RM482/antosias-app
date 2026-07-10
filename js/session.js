@@ -10,10 +10,10 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=29';
-import { playBlobSequence, unlockAudio } from './media.js?v=29';
-import { el, shuffle, onTap } from './dom.js?v=29';
-import { mountParentGate } from './gate.js?v=29';
+} from './db.js?v=30';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=30';
+import { el, shuffle, onTap } from './dom.js?v=30';
+import { mountParentGate } from './gate.js?v=30';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -132,6 +132,7 @@ export async function startSession(categoryId, opts = {}) {
 }
 
 function exitSession() {
+  stopPlayback(); // leaving the session silences whatever was still talking
   sessionEl.hidden = true;
   sessionEl.innerHTML = '';
   appEl.hidden = false;
@@ -176,18 +177,12 @@ function renderListenStage(state) {
   screen.appendChild(el('div', { class: 'session-label', text: wordLabel(word) }));
   screen.appendChild(el('div', { class: 'session-hint', text: 'Tap the picture to hear it' }));
 
-  let isPlaying = false;
-  async function playWord() {
-    if (isPlaying) return; // prevent overlapping playback
-    isPlaying = true;
+  // The shared `key` enforces one-sound-at-a-time: a repeat tap while this
+  // word is still playing is ignored (the clip finishes), and any different
+  // sound started elsewhere cuts it off (see media.js stopPlayback).
+  function playWord() {
     unlockAudio();
-    try {
-      await playBlobSequence([word.audioWord, word.audioPhrase]);
-    } catch {
-      // Ignore playback errors from rapid repeated taps.
-    } finally {
-      isPlaying = false;
-    }
+    playBlobSequence([word.audioWord, word.audioPhrase], { key: `listen:${word.id}` }).catch(() => {});
   }
   onTap(photoBtn, playWord);
 
@@ -235,21 +230,29 @@ function renderGameStage(state) {
   const optionsWrap = el('div', { class: 'session-options' });
   const options = shuffle([word, distractor]);
 
+  // All game audio is keyed (one-sound rule, media.js): tapping something
+  // that plays a DIFFERENT sound cuts the current one off mid-word; tapping
+  // something that would REPEAT the sound already playing is ignored so the
+  // clip finishes cleanly — never stacked, never restarted.
+
   // "Klik op de" + "banaan" → "Klik op de banaan". Falls back to the bare
-  // word when the carrier isn't recorded. playBlobSequence chains the clips
-  // through a single audio element, so a tiny seam between them is expected.
+  // word when the carrier isn't recorded.
   function sayPrompt() {
     unlockAudio();
-    playBlobSequence([promptCarrier(word, phrases, language), word.audioWord].filter(Boolean)).catch(() => {});
+    playBlobSequence([promptCarrier(word, phrases, language), word.audioWord].filter(Boolean), {
+      key: `prompt:${word.id}`,
+    }).catch(() => {});
   }
   // Names the wrong word she tapped ("Nee, dit is een mandarijn" / "…brood" for
   // Dutch; "To jest …" for Polish). Speaks only if the matching clip exists.
-  // Returns a promise that resolves when playback completes.
+  // Resolves with the playback result (see playBlobSequence).
   async function sayCorrection(wrongWord) {
     const carrier = correctionCarrier(wrongWord, phrases, language);
-    if (!carrier) return;
+    if (!carrier) return { completed: true }; // nothing to say — re-ask right away
     unlockAudio();
-    return playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean)).catch(() => {});
+    return playBlobSequence([carrier, wrongWord.audioWord].filter(Boolean), {
+      key: `correction:${wrongWord.id}`,
+    }).catch(() => ({ cancelled: true }));
   }
 
   let answered = false;
@@ -257,7 +260,7 @@ function renderGameStage(state) {
     const goed = phrases?.goed;
     if (!goed) return;
     unlockAudio();
-    playBlobSequence([goed]).catch(() => {});
+    playBlobSequence([goed], { key: 'goed' }).catch(() => {});
   }
   for (const opt of options) {
     const btn = el('button', { type: 'button', class: 'session-option' });
@@ -266,7 +269,7 @@ function renderGameStage(state) {
       if (answered) return;
       if (opt.id === word.id) {
         answered = true;
-        playCorrectFeedback();
+        playCorrectFeedback(); // cuts off a still-playing correction/prompt
         btn.classList.add('correct');
         setTimeout(() => {
           state.stage = 'prompt';
@@ -275,9 +278,12 @@ function renderGameStage(state) {
       } else {
         btn.classList.add('wiggle');
         setTimeout(() => btn.classList.remove('wiggle'), 500);
-        sayCorrection(opt).then(() => {
-          // After correction, re-ask the prompt so she gets another chance
-          sayPrompt();
+        sayCorrection(opt).then((res) => {
+          // Re-ask the prompt so she gets another chance — but only if the
+          // correction actually played to the end. If she tapped on (the
+          // correction got cut off or was already playing) or answered
+          // correctly meanwhile, a re-ask now would talk over that audio.
+          if (res && res.completed && !answered) sayPrompt();
         });
       }
     });

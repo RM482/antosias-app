@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup } from './db.js?v=29';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=29';
-import { startSession, initSession } from './session.js?v=29';
-import { startChildMode } from './child.js?v=29';
-import { el } from './dom.js?v=29';
-import { exportAndShare, importFromGist, importPayload } from './backup.js?v=29';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup } from './db.js?v=30';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=30';
+import { startSession, initSession } from './session.js?v=30';
+import { startChildMode } from './child.js?v=30';
+import { el } from './dom.js?v=30';
+import { exportAndShare, importFromGist, importPayload } from './backup.js?v=30';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];

@@ -1,8 +1,8 @@
-import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=29';
-import { unlockAudio, playBlobSequence } from './media.js?v=29';
-import { el, onTap } from './dom.js?v=29';
-import { startSession } from './session.js?v=29';
-import { mountParentGate } from './gate.js?v=29';
+import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=30';
+import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=30';
+import { el, onTap } from './dom.js?v=30';
+import { startSession } from './session.js?v=30';
+import { mountParentGate } from './gate.js?v=30';
 
 // Child-first flow (Stage 6, canonical order per STAGE_6_PLAN.md contract C1):
 // Play → flag → category tiles → (face pick, Phase B) → intro → collage →
@@ -42,6 +42,7 @@ export async function startChildMode(onExit) {
 }
 
 function exitChildMode(state) {
+  stopPlayback(); // e.g. an intro clip still talking when the gate exits
   sessionEl.hidden = true;
   sessionEl.innerHTML = '';
   appEl.hidden = false;
@@ -172,7 +173,7 @@ function renderIntro(state, language, person, next) {
 
   if (person.introAudio) {
     // Advance shortly after the clip ends; a tap can always skip ahead.
-    playBlobSequence([person.introAudio])
+    playBlobSequence([person.introAudio], { key: 'intro' })
       .catch(() => {})
       .then(() => setTimeout(advance, 600));
   } else {
