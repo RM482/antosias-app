@@ -102,6 +102,50 @@ export async function putAllTransactional(writes) {
   });
 }
 
+// Deletes a word AND everything only it owns: its photos-store blob when no
+// other word — in either language, twins share photos — still references the
+// same photoId, plus (once the Stage-6 recordings store exists) any per-person
+// recordings of it. Everything runs inside ONE readwrite transaction using raw
+// IDB requests: IndexedDB auto-commits the moment you await anything non-IDB,
+// so splitting this into separate remove() calls could leave an orphan behind
+// if a later step failed.
+export async function deleteWordAndCleanup(wordId) {
+  const db = await openDB();
+  const storeNames = ['words', 'photos'];
+  const hasRecordings = db.objectStoreNames.contains('recordings');
+  if (hasRecordings) storeNames.push('recordings');
+  const t = db.transaction(storeNames, 'readwrite');
+  const words = t.objectStore('words');
+
+  const getReq = words.get(wordId);
+  getReq.onsuccess = () => {
+    const word = getReq.result;
+    words.delete(wordId);
+    if (word && word.photoId) {
+      // Requests in a transaction run in order, so this getAll already
+      // excludes the word deleted above — it no longer counts as a reference.
+      const allReq = words.getAll();
+      allReq.onsuccess = () => {
+        const stillReferenced = allReq.result.some((w) => w.photoId === word.photoId);
+        if (!stillReferenced) t.objectStore('photos').delete(word.photoId);
+      };
+    }
+    if (hasRecordings) {
+      const recStore = t.objectStore('recordings');
+      const keysReq = recStore.index('wordId').getAllKeys(wordId);
+      keysReq.onsuccess = () => {
+        for (const key of keysReq.result) recStore.delete(key);
+      };
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(storageError(t.error, 'deleting a word'));
+    t.onabort = () => reject(storageError(t.error, 'deleting a word (transaction aborted)'));
+  });
+}
+
 // --- Photo storage (shared across languages) ---
 
 export async function savePhoto(blob) {

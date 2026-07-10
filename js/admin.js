@@ -1,4 +1,4 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos } from './db.js?v=28';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup } from './db.js?v=28';
 import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=28';
 import { startSession, initSession } from './session.js?v=28';
 import { el } from './dom.js?v=28';
@@ -462,7 +462,7 @@ async function renderCategoryEdit({ categoryId }) {
           if (!confirm(`Delete "${existing.name}" and its ${toDelete.length} word(s)? This can't be undone.`)) {
             return;
           }
-          for (const w of toDelete) await remove('words', w.id);
+          for (const w of toDelete) await deleteWordAndCleanup(w.id);
           await remove('categories', categoryId);
           pop();
         },
@@ -988,7 +988,7 @@ async function renderWordEdit({ categoryId, wordId }) {
         text: 'Delete word',
         onclick: async () => {
           if (!confirm(`Delete "${wordLabel(draft)}"? This can't be undone.`)) return;
-          await remove('words', draft.id);
+          await deleteWordAndCleanup(draft.id);
           pop();
         },
       })
