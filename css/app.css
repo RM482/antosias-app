@@ -681,6 +681,95 @@ p {
   transform: scaleX(1);
 }
 
+/* --- Child-first flow (Stage 6) --- */
+
+/* Antosia's own big friendly entry button at the top of the home screen. */
+.play-btn {
+  width: 100%;
+  font-size: 1.5rem;
+  padding: 20px;
+  border-radius: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+
+.child-flag-stage {
+  gap: 32px;
+}
+
+.child-flag-btn {
+  appearance: none;
+  border: none;
+  background: var(--card-bg);
+  width: min(48vw, 220px);
+  height: min(48vw, 220px);
+  border-radius: 32px;
+  font-size: min(24vw, 108px);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.child-flag-btn:active {
+  transform: scale(0.96);
+}
+
+.child-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.child-tile {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  border-radius: 22px;
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--fg);
+  font: inherit;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  min-height: 44px;
+}
+
+.child-tile:active {
+  transform: scale(0.97);
+}
+
+.child-tile-emoji {
+  font-size: 2.6rem;
+  line-height: 1;
+}
+
+.child-tile-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.child-tile-photos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+}
+
+.child-tile-photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
 /* --- Home-screen language switcher --- */
 .lang-switch {
   display: flex;

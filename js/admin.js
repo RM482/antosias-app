@@ -1,6 +1,7 @@
 import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup } from './db.js?v=28';
 import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=28';
 import { startSession, initSession } from './session.js?v=28';
+import { startChildMode } from './child.js?v=28';
 import { el } from './dom.js?v=28';
 import { exportAndShare, importFromGist, importPayload } from './backup.js?v=28';
 
@@ -225,6 +226,17 @@ async function renderCategories() {
   );
 
   const screen = el('div', { class: 'screen' });
+
+  // Child-first entry (Stage 6): Antosia's own button. It opens the flag →
+  // category-tiles flow; the per-category "▶ Start" buttons below stay as the
+  // parent's instant path with no intro screens.
+  screen.appendChild(
+    el('button', {
+      class: 'play-btn',
+      text: '▶ Play',
+      onclick: () => startChildMode(returnHome),
+    })
+  );
 
   // Language switcher (flags). Tapping a flag stores the choice, seeds that
   // language's starter words the first time, and re-renders everything for it.
@@ -1406,11 +1418,15 @@ async function render() {
   if (view.screen === 'personEdit') return renderPersonEdit(view);
 }
 
-initSession(() => {
+// Shared "back to the admin home screen" used by both exits from the #session
+// overlay: the end of a session (initSession) and the child-mode parent gate.
+function returnHome() {
   stack.length = 0;
   stack.push({ screen: 'categories' });
   render();
-});
+}
+
+initSession(returnHome);
 
 function showStartupMessage(text) {
   appEl.innerHTML = '';
