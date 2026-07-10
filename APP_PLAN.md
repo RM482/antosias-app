@@ -1,6 +1,40 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, latest) — live app `?v=34`
+## Status (as of 10 July 2026, latest) — live app `?v=35`
+
+**v35 shipped — multiple photos per word (parent request):**
+
+- Word editor gains "More photos of the same thing (optional)": add via one
+  ＋ Add photo button (iOS picker offers camera/library), thumbnails shown, tap a
+  thumbnail (+ confirm) to remove. Persisted on Save only, like the whole form.
+- Data shape per the design sketch: `word.photoId` stays the single primary
+  (twin pairing, list/request thumbnails untouched); `word.extraPhotoIds: []`
+  rides on the word record, blobs in the existing `photos` store. No DB bump.
+- `attachPhotos` loads extras onto `word.extraPhotos`; sessions' `wordVisual`
+  picks randomly from primary+extras on every appearance (listen stage, game
+  tiles, distractors) — so she learns the concept, not one object.
+- Cleanup is leak-free both ways: removing an extra in the editor deletes its
+  blob unless another word references it; `deleteWordAndCleanup` cascades all of
+  a word's photo ids with the same shared-reference check.
+- Backups already export/import the whole photos store → extras included, no
+  format change.
+- Verified end-to-end in headless Chromium: add 2 → save → reopen (persisted;
+  DB checked) → remove 1 → no orphan blob left in the photos store → full
+  session showed a real image for the extras-only word. Zero console errors.
+
+**⏭️ QUEUED — child-mode flow reorder (parent request, 10 July 2026):**
+The intro should come BEFORE the category choice. Current child flow (child.js,
+contract C1): flag → category tiles → face pick → host intro ("Nederlands!" with
+the parent's photo) → collage → session. Wanted: flag → **host intro** → category
+tiles → … . Think through: the intro is per-language (fine, language is known at
+flag tap) but the face pick is per-category (voices vary by category coverage) —
+the simplest correct order is flag → default-voice intro → tiles → face pick →
+collage → session, keeping C2/C10 degradation (no person/photo/intro → skip
+silently). Check whether the chosen person's intro should then ALSO play after
+face pick (probably yes, brief, it's "their" greeting) or only the default one up
+front.
+
+**Also queued:** reward polish if real use asks (sticker book screen in child mode).
 
 **v34 shipped — the reward system:**
 

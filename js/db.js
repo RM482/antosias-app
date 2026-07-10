@@ -134,13 +134,18 @@ export async function deleteWordAndCleanup(wordId) {
   getReq.onsuccess = () => {
     const word = getReq.result;
     words.delete(wordId);
-    if (word && word.photoId) {
+    const photoIds = word ? [word.photoId, ...(word.extraPhotoIds || [])].filter(Boolean) : [];
+    if (photoIds.length) {
       // Requests in a transaction run in order, so this getAll already
       // excludes the word deleted above — it no longer counts as a reference.
       const allReq = words.getAll();
       allReq.onsuccess = () => {
-        const stillReferenced = allReq.result.some((w) => w.photoId === word.photoId);
-        if (!stillReferenced) t.objectStore('photos').delete(word.photoId);
+        for (const id of photoIds) {
+          const stillReferenced = allReq.result.some(
+            (w) => w.photoId === id || (w.extraPhotoIds || []).includes(id)
+          );
+          if (!stillReferenced) t.objectStore('photos').delete(id);
+        }
       };
     }
     if (hasRecordings) {
@@ -243,21 +248,27 @@ export async function saveWord(wordDraft) {
 // the list that carries a photoId. Legacy words with an inline photo are left
 // untouched. Mutates and returns the same array.
 export async function attachPhotos(words) {
-  const ids = [...new Set(words.map((w) => w.photoId).filter(Boolean))];
+  // Primary photo (photoId) plus any extra photos (extraPhotoIds, optional —
+  // several pictures of the same concept, rotated at display time).
+  const ids = [
+    ...new Set(words.flatMap((w) => [w.photoId, ...(w.extraPhotoIds || [])]).filter(Boolean)),
+  ];
+  const blobs = new Map();
   await Promise.all(
     ids.map(async (id) => {
-      let rec = null;
       try {
-        rec = await get('photos', id);
+        const rec = await get('photos', id);
+        if (rec && rec.blob) blobs.set(id, rec.blob);
       } catch {
-        return; // photo just won't display
-      }
-      if (!rec || !rec.blob) return;
-      for (const w of words) {
-        if (w.photoId === id) w.photo = rec.blob;
+        /* photo just won't display */
       }
     })
   );
+  for (const w of words) {
+    if (w.photoId && blobs.has(w.photoId)) w.photo = blobs.get(w.photoId);
+    const extras = (w.extraPhotoIds || []).map((id) => blobs.get(id)).filter(Boolean);
+    if (extras.length) w.extraPhotos = extras;
+  }
   return words;
 }
 

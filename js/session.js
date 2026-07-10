@@ -11,11 +11,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=34';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=34';
-import { el, shuffle, onTap } from './dom.js?v=34';
-import { mountParentGate } from './gate.js?v=34';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=34';
+} from './db.js?v=35';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=35';
+import { el, shuffle, onTap } from './dom.js?v=35';
+import { mountParentGate } from './gate.js?v=35';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=35';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -178,9 +178,13 @@ function exitSession() {
 
 function wordVisual(word, className) {
   const box = el('div', { class: className });
-  if (word.photo) {
+  // A word can have several photos of the same concept (three different
+  // paintings for "schilderij"); each appearance picks one at random so she
+  // learns the concept rather than one specific object.
+  const pool = [word.photo, ...(word.extraPhotos || [])].filter(Boolean);
+  if (pool.length) {
     const img = el('img', { alt: '' });
-    img.src = URL.createObjectURL(word.photo);
+    img.src = URL.createObjectURL(pool[Math.floor(Math.random() * pool.length)]);
     box.appendChild(img);
   } else {
     box.textContent = word.placeholderEmoji || '🔤';

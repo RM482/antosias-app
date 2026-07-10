@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=34';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=34';
-import { startSession, initSession } from './session.js?v=34';
-import { startChildMode } from './child.js?v=34';
-import { el } from './dom.js?v=34';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=34';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=35';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=35';
+import { startSession, initSession } from './session.js?v=35';
+import { startChildMode } from './child.js?v=35';
+import { el } from './dom.js?v=35';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=35';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -851,6 +851,81 @@ async function renderWordEdit({ categoryId, wordId }) {
 
   buildPhotoControl(screen, draft);
 
+  // --- Extra photos (optional) ---
+  // Several pictures of the same concept (e.g. three different paintings for
+  // "schilderij") so sessions rotate between them and she learns the concept,
+  // not one specific object. The photo above stays the word's primary — it
+  // links language twins and is used for list/request thumbnails. Entries
+  // hold either a saved id or a not-yet-saved blob; everything persists on
+  // Save (never on tap), same as the rest of this form.
+  const extraEntries = [];
+  for (const pid of draft.extraPhotoIds || []) {
+    let blob = null;
+    try {
+      blob = (await get('photos', pid))?.blob || null;
+    } catch {
+      /* undisplayable, still kept */
+    }
+    extraEntries.push({ id: pid, blob });
+  }
+  const originalExtraIds = extraEntries.map((e) => e.id);
+  {
+    const wrap = el('div', { class: 'media-block' });
+    wrap.appendChild(
+      el('div', { class: 'field-label', text: 'More photos of the same thing (optional)' })
+    );
+    wrap.appendChild(
+      el('p', {
+        class: 'settings-note',
+        text: 'Sessions switch between all the photos, so she learns the word — not one specific object. Tap a photo to remove it.',
+      })
+    );
+    const thumbRow = el('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;' });
+    function refreshThumbs() {
+      thumbRow.innerHTML = '';
+      extraEntries.forEach((entry, i) => {
+        const thumb = el('button', {
+          type: 'button',
+          class: 'thumb large',
+          'aria-label': 'Remove this photo',
+        });
+        if (entry.blob) {
+          const img = el('img', { alt: '' });
+          img.src = URL.createObjectURL(entry.blob);
+          thumb.appendChild(img);
+        } else {
+          thumb.textContent = '🖼️';
+        }
+        thumb.onclick = () => {
+          if (confirm('Remove this extra photo?')) {
+            extraEntries.splice(i, 1);
+            refreshThumbs();
+          }
+        };
+        thumbRow.appendChild(thumb);
+      });
+    }
+    refreshThumbs();
+    wrap.appendChild(thumbRow);
+
+    const addInput = el('input', { type: 'file', accept: 'image/*', hidden: '' });
+    addInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        extraEntries.push({ id: null, blob: await downscaleImage(file) });
+        refreshThumbs();
+      } catch (err) {
+        alert(`Could not use that photo: ${err.message}`);
+      }
+    });
+    const btnRow = el('div', { class: 'btn-row' });
+    btnRow.appendChild(el('label', { class: 'btn' }, [el('span', { text: '＋ Add photo' }), addInput]));
+    wrap.appendChild(btnRow);
+    screen.appendChild(wrap);
+  }
+
   buildAudioControl(screen, {
     title: 'Word audio (say just the word)',
     maxMs: 6000,
@@ -1027,9 +1102,27 @@ async function renderWordEdit({ categoryId, wordId }) {
         draft.word = draft.word.trim();
         draft.updatedAt = Date.now();
 
+        // Persist extra photos: new blobs get ids in the photos store; the
+        // word carries only the id list.
+        for (const entry of extraEntries) {
+          if (!entry.id && entry.blob) entry.id = await savePhoto(entry.blob);
+        }
+        draft.extraPhotoIds = extraEntries.map((e) => e.id).filter(Boolean);
+
         // Save the main word first — saveWord writes the (possibly new)
         // photoId back onto the draft, so the paired word can share it.
         await saveWord(draft);
+
+        // Extra photos removed in this edit: delete their blobs unless some
+        // other word still references them (photoId or extras).
+        for (const removedId of originalExtraIds.filter((id) => !draft.extraPhotoIds.includes(id))) {
+          const referenced = allWords.some(
+            (w) =>
+              w.id !== draft.id &&
+              (w.photoId === removedId || (w.extraPhotoIds || []).includes(removedId))
+          );
+          if (!referenced) await remove('photos', removedId).catch(() => {});
+        }
 
         const pairedText = pairedDraft.word.trim();
         if (pairedText) {
@@ -2200,7 +2293,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=34');
+    const { startRecordingPage } = await import('./record.js?v=35');
     startRecordingPage(recordGistId);
     return;
   }
