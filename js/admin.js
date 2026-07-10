@@ -1,4 +1,4 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup } from './db.js?v=28';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup } from './db.js?v=28';
 import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=28';
 import { startSession, initSession } from './session.js?v=28';
 import { el } from './dom.js?v=28';
@@ -63,7 +63,10 @@ function buildSegmented(container, { label, options, value, onChange }) {
   };
 }
 
-function buildPhotoControl(container, draft) {
+// Photo take/choose control writing a downscaled Blob to draft.photo. Words
+// also get the placeholder-emoji field; people (showEmoji: false) just show a
+// generic face until a photo is added.
+function buildPhotoControl(container, draft, { showEmoji = true, emptyIcon = '🔤' } = {}) {
   const wrap = el('div', { class: 'media-block' });
   wrap.appendChild(el('div', { class: 'field-label', text: 'Photo' }));
 
@@ -76,26 +79,28 @@ function buildPhotoControl(container, draft) {
       img.src = URL.createObjectURL(draft.photo);
       thumb.appendChild(img);
     } else {
-      thumb.textContent = draft.placeholderEmoji || '🔤';
+      thumb.textContent = (showEmoji && draft.placeholderEmoji) || emptyIcon;
     }
   }
   refreshThumb();
   previewRow.appendChild(thumb);
 
-  const emojiField = el('div', {}, [
-    el('div', { class: 'field-label', text: 'Placeholder emoji (used until a real photo is added)' }),
-    el('input', {
-      type: 'text',
-      value: draft.placeholderEmoji || '',
-      maxlength: '4',
-      placeholder: '🍌',
-      oninput: (e) => {
-        draft.placeholderEmoji = e.target.value;
-        if (!draft.photo) refreshThumb();
-      },
-    }),
-  ]);
-  previewRow.appendChild(emojiField);
+  if (showEmoji) {
+    const emojiField = el('div', {}, [
+      el('div', { class: 'field-label', text: 'Placeholder emoji (used until a real photo is added)' }),
+      el('input', {
+        type: 'text',
+        value: draft.placeholderEmoji || '',
+        maxlength: '4',
+        placeholder: '🍌',
+        oninput: (e) => {
+          draft.placeholderEmoji = e.target.value;
+          if (!draft.photo) refreshThumb();
+        },
+      }),
+    ]);
+    previewRow.appendChild(emojiField);
+  }
   wrap.appendChild(previewRow);
 
   const btnRow = el('div', { class: 'btn-row' });
@@ -1023,6 +1028,22 @@ async function renderSettings() {
   const langLabel = (LANGUAGES.find((l) => l.code === lang) || {}).label || '';
   const phrases = await getStandardPhrases(lang);
 
+  // --- People & voices (Stage 6) ---
+  screen.appendChild(
+    card('👪 People & voices', [
+      el('p', {
+        class: 'settings-note',
+        text: 'Family members and friends: their photos and voices for child mode — the session intro and the family collage.',
+      }),
+      el('button', {
+        class: 'btn-secondary',
+        text: 'Manage people',
+        style: 'width:100%;',
+        onclick: () => push({ screen: 'people' }),
+      }),
+    ])
+  );
+
   // --- Backup reminder ---
   const last = settings.lastBackupAt;
   const daysSince = last ? Math.floor((Date.now() - last) / 86400000) : null;
@@ -1172,6 +1193,205 @@ async function renderSettings() {
   appEl.appendChild(screen);
 }
 
+// --- People & voices (Stage 6) -----------------------------------------------------
+
+async function renderPeople() {
+  appEl.appendChild(
+    topbar({
+      title: 'People & voices',
+      onBack: () => pop(),
+      onAdd: () => push({ screen: 'personEdit', personId: null }),
+    })
+  );
+  const screen = el('div', { class: 'screen' });
+  const people = await getAll('people');
+
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text:
+        'The people Antosia sees and hears in child mode: whose photo opens a session, who appears in each language’s family collage, and (soon) whose voice she can pick.',
+    })
+  );
+
+  for (const l of LANGUAGES) {
+    const group = people
+      .filter((p) => p.language === l.code)
+      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    const children = [];
+
+    if (!group.some((p) => p.isDefaultVoice)) {
+      children.push(
+        el('p', {
+          class: 'settings-note settings-note-warn',
+          text:
+            l.code === 'nl'
+              ? 'Add yourself first — your photo and you saying “Nederlands” — and mark yourself as the default voice.'
+              : 'Add yourself first — your photo and you saying “Polski” — and mark yourself as the default voice.',
+        })
+      );
+    }
+
+    if (group.length === 0) {
+      children.push(el('p', { class: 'settings-note', text: 'No people yet. Tap "+ Add" above.' }));
+    } else {
+      const list = el('ul', { class: 'list' });
+      for (const p of group) {
+        const thumb = el('div', { class: 'thumb' });
+        if (p.photo) {
+          const img = el('img', { alt: '' });
+          img.src = URL.createObjectURL(p.photo);
+          thumb.appendChild(img);
+        } else {
+          thumb.textContent = '👤';
+        }
+        const badges = [];
+        if (p.isDefaultVoice) badges.push(el('span', { class: 'badge badge-ok', text: 'Default voice' }));
+        if (p.inCollage) badges.push(el('span', { class: 'badge badge-muted', text: 'In collage' }));
+        list.appendChild(
+          el('li', {}, [
+            el(
+              'button',
+              { class: 'list-item', onclick: () => push({ screen: 'personEdit', personId: p.id }) },
+              [
+                thumb,
+                el('div', { class: 'list-item-body' }, [
+                  el('div', { class: 'list-item-title', text: p.name || '(unnamed)' }),
+                  el('div', { class: 'badge-row' }, badges),
+                ]),
+              ]
+            ),
+          ])
+        );
+      }
+      children.push(list);
+    }
+    screen.appendChild(card(`${l.flag} ${l.label}`, children));
+  }
+
+  appEl.appendChild(screen);
+}
+
+async function renderPersonEdit({ personId }) {
+  const isNew = !personId;
+  const [existing, settings] = await Promise.all([
+    isNew ? null : get('people', personId),
+    getSettings(),
+  ]);
+  if (!isNew && !existing) {
+    pop();
+    return;
+  }
+
+  const now = Date.now();
+  const draft = existing
+    ? { ...existing }
+    : {
+        id: newId(),
+        name: '',
+        language: settings.language || 'nl',
+        photo: null,
+        introAudio: null,
+        inCollage: true,
+        isDefaultVoice: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+  appEl.appendChild(topbar({ title: isNew ? 'New person' : draft.name || 'Edit person', onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+
+  screen.appendChild(
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Name (what Antosia calls them)' }),
+      el('input', {
+        type: 'text',
+        value: draft.name,
+        placeholder: 'e.g. Papa, Oma Els, Ciocia Kasia',
+        oninput: (e) => (draft.name = e.target.value),
+      }),
+    ])
+  );
+
+  buildSegmented(screen, {
+    label: 'Language they represent',
+    options: LANGUAGES.map((l) => ({ label: `${l.flag} ${l.label}`, value: l.code })),
+    value: draft.language,
+    onChange: (v) => (draft.language = v),
+  });
+
+  buildPhotoControl(screen, draft, { showEmoji: false, emptyIcon: '👤' });
+
+  buildAudioControl(screen, {
+    title: 'Them saying the language name — “Nederlands” / “Polski” (plays when a session opens)',
+    maxMs: 4000,
+    getBlob: () => draft.introAudio,
+    setBlob: (b) => (draft.introAudio = b),
+    required: false,
+  });
+
+  buildSegmented(screen, {
+    label: 'Show in the family collage',
+    options: [
+      { label: 'Yes', value: 'yes' },
+      { label: 'No', value: 'no' },
+    ],
+    value: draft.inCollage ? 'yes' : 'no',
+    onChange: (v) => (draft.inCollage = v === 'yes'),
+  });
+
+  buildSegmented(screen, {
+    label: 'Default voice for this language (usually you — the voice on the words themselves)',
+    options: [
+      { label: 'Yes', value: 'yes' },
+      { label: 'No', value: 'no' },
+    ],
+    value: draft.isDefaultVoice ? 'yes' : 'no',
+    onChange: (v) => (draft.isDefaultVoice = v === 'yes'),
+  });
+
+  const actions = el('div', { class: 'form-actions' });
+  actions.appendChild(
+    el('button', {
+      text: 'Save',
+      onclick: async () => {
+        if (!draft.name.trim()) {
+          alert('Please enter a name.');
+          return;
+        }
+        draft.name = draft.name.trim();
+        draft.updatedAt = Date.now();
+        // savePerson clears the default-voice flag on whoever held it before.
+        await savePerson(draft);
+        pop();
+      },
+    })
+  );
+
+  if (!isNew) {
+    actions.appendChild(
+      el('button', {
+        class: 'btn-danger',
+        text: 'Delete person',
+        onclick: async () => {
+          if (
+            !confirm(
+              `Delete "${draft.name}"? Any words and phrases recorded in their voice are deleted too. This can't be undone.`
+            )
+          )
+            return;
+          await deletePersonAndCleanup(draft.id);
+          pop();
+        },
+      })
+    );
+  }
+
+  actions.appendChild(el('button', { class: 'btn-secondary', text: 'Cancel', onclick: () => pop() }));
+  screen.appendChild(actions);
+  appEl.appendChild(screen);
+}
+
 // --- Render dispatch + init -----------------------------------------------------
 
 async function render() {
@@ -1182,6 +1402,8 @@ async function render() {
   if (view.screen === 'words') return renderWords(view);
   if (view.screen === 'wordEdit') return renderWordEdit(view);
   if (view.screen === 'settings') return renderSettings();
+  if (view.screen === 'people') return renderPeople();
+  if (view.screen === 'personEdit') return renderPersonEdit(view);
 }
 
 initSession(() => {

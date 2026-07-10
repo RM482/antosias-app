@@ -13,6 +13,7 @@ import {
 } from './db.js?v=28';
 import { playBlobSequence, unlockAudio } from './media.js?v=28';
 import { el, shuffle, onTap } from './dom.js?v=28';
+import { mountParentGate } from './gate.js?v=28';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -80,7 +81,7 @@ function pickDistractor(target, sameCategoryPool, allEligiblePool) {
   return null;
 }
 
-export async function startSession(categoryId) {
+export async function startSession(categoryId, opts = {}) {
   // Runs synchronously within the "Start" tap, so the audio context resumes
   // inside a user gesture (iOS requirement) before the first clip autoplays.
   unlockAudio();
@@ -113,6 +114,9 @@ export async function startSession(categoryId) {
   const state = {
     category,
     language,
+    // Whose voice this session plays in. Unused until Stage 6 Phase B — today
+    // every session uses the words' own inline audio (the default voice).
+    personId: opts.personId || null,
     steps,
     phrases, // language-scoped carrier recordings (see getStandardPhrases)
     index: 0,
@@ -123,7 +127,7 @@ export async function startSession(categoryId) {
   appEl.hidden = true;
   sessionEl.hidden = false;
   sessionEl.innerHTML = '';
-  mountParentGate();
+  mountParentGate(exitSession);
   renderStep(state);
 }
 
@@ -132,44 +136,6 @@ function exitSession() {
   sessionEl.innerHTML = '';
   appEl.hidden = false;
   if (exitCallback) exitCallback();
-}
-
-// --- Hold-to-exit parent gate -----------------------------------------------------
-
-function mountParentGate() {
-  const gate = el('button', { type: 'button', class: 'parent-gate', 'aria-label': 'Hold to exit to parent area' });
-  const dot = el('div', { class: 'parent-gate-dot' });
-  const fill = el('div', { class: 'parent-gate-fill' });
-  dot.appendChild(fill);
-  gate.appendChild(dot);
-
-  // Plain touch events (not Pointer Events, which have had capture/leave
-  // quirks on iOS Safari). We deliberately don't listen for touchmove, so
-  // finger drift during the hold has no effect — only an actual lift
-  // (touchend) or an OS-level gesture takeover (touchcancel) cancels it.
-  let timer = null;
-  const start = (e) => {
-    if (e.cancelable) e.preventDefault();
-    fill.classList.add('filling');
-    timer = setTimeout(() => {
-      fill.classList.remove('filling');
-      exitSession();
-    }, 3000);
-  };
-  const cancel = () => {
-    clearTimeout(timer);
-    fill.classList.remove('filling');
-  };
-
-  gate.addEventListener('touchstart', start, { passive: false });
-  gate.addEventListener('touchend', cancel);
-  gate.addEventListener('touchcancel', cancel);
-  // Mouse fallback so this is still testable in a desktop browser.
-  gate.addEventListener('mousedown', start);
-  gate.addEventListener('mouseup', cancel);
-  gate.addEventListener('mouseleave', cancel);
-
-  sessionEl.appendChild(gate);
 }
 
 // --- Shared visual helper -----------------------------------------------------

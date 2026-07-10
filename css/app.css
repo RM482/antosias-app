@@ -705,6 +705,14 @@ p {
   border-color: var(--accent);
 }
 
+/* --- People & voices --- */
+.badge-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
 /* --- Settings screen --- */
 .settings-card {
   background: var(--card-bg);
