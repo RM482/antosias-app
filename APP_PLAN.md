@@ -1,10 +1,31 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, evening) — live app `?v=31`; Phase C committed locally, NOT deployed
+## Status (as of 10 July 2026, night) — live app `?v=32`; ALL of Stage 6 deployed
 
-**⏭️ NEXT SESSION — finish Phase C verification, then deploy.** Phase C (remote
-recording requests) is fully written and committed on `main` locally but deliberately
-NOT pushed: the live phone app is still the verified v31. What's in the local commit:
+**Stage 6 is code-complete: Phases A, B, and C are all deployed.** Phase C finished
+its local verification and shipped as v32. Desktop-verified: normal startup unaffected
+by the `?record=` route; the import pipeline (unplayable clip flagged and kept out,
+deleted-word recording skipped+counted, re-import fully idempotent, C6 null-photo
+protection); the request builder end-to-end (category toggles → 5KB request file with
+thumbnails + publish-instructions alert); and the builder's own output running the
+recording wizard through every screen in both Dutch and Polish.
+
+**⏭️ NEXT: on-phone verification, in this order:**
+1. **Phase B on the phone** (§3.5): add a non-default person, record 2–3 words via
+   "🎙 Record words" (silly accent is fine) → Play → face pick appears → session in
+   that voice. Then a fresh backup (now includes recordings).
+2. **Phase C end-to-end** (§4.4): build a request on the phone → AirDrop to Mac →
+   `~/.local/bin/gh gist create <file>` → open
+   `https://rm482.github.io/antosias-app/?record=<gistId>` in a FRESH browser profile
+   (private window is fine — the page uses no storage; confirm no `antosia-app`
+   database is created, and that opening the plain app URL afterwards still seeds as
+   first-open) → record → "📤 Versturen" → import the file via Settings → "📥 Import
+   family recordings" → face pick offers them → import the same file again → no
+   duplicates. Test once from an Android device BEFORE asking the whole family (codec
+   risk — the import's decode-check reports unplayable clips by name).
+3. Still unconfirmed on-device from v30: categories read Ontbijt/Kleren/Speelgoed.
+
+**What Phase C contains (shipped v32):**
 
 - **`js/record.js` (new):** the family member's recording page (`?record=<gistId>`),
   built for technically-inept elderly relatives — one task per screen, one giant
@@ -29,23 +50,6 @@ NOT pushed: the live phone app is still the verified v31. What's in the local co
   was ready did nothing; UI said "speak now!" while the permission prompt was still
   up (now a calm "one moment…" until capture truly starts); mic-denied message was
   being overwritten.
-
-**Verified so far (desktop browser):** full wizard walk in Dutch AND Polish (greeting,
-tips with all requested guidance, intro/photo/word/phrase/carrier/send screens, skip
-paths, thumbnails, progress counter). **Still to do before deploying:**
-1. Test the import pipeline in the browser: `analyzeRecordingResponse` +
-   `applyRecordingResponse` with real WAV clips + one undecodable clip (unplayable
-   list) + one deleted wordId (skipped count); import twice → idempotent; C6:
-   response with null photo must not wipe an existing photo.
-2. Render-test the request-builder screen (person edit → "📋 Create recording
-   request") and create a file end-to-end.
-3. Confirm normal admin startup is unaffected by the new `?record=` routing (load the
-   app, check console for errors).
-4. Then: `sed` bump `?v=31` → `?v=32` in index.html + js/*.js, `node --check js/*.js`,
-   commit, push (= deploy), and run the §4.4 on-phone checklist (fresh-profile
-   `?record=` link must not create a database; real request → record on a second
-   device → send back → import; re-import no duplicates; Android codec test before
-   asking the whole family).
 
 **Phase C flow reminder (for the parent):** build request in app → AirDrop file to
 Mac → `~/.local/bin/gh gist create <file>` → send
