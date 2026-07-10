@@ -1,14 +1,40 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 9 July 2026) — live app `?v=28`
+## Status (as of 10 July 2026) — live app `?v=29`
 
-**⏭️ NEXT SESSION: implement STAGE_6_PLAN.md (v3, twice Codex-reviewed — read its
-"Implementation contracts" section first).** Phase A starts with step ⓪, the
-orphaned-photo cleanup fix (a live bug: deleting a word leaves its photos-store blob
-behind). Before coding, two 1-minute phone checks from yesterday's deploys:
-(1) Dutch categories should now read Ontbijt / Kleren / Speelgoed (the v28 rename
-shipped but was not confirmed on-device); (2) confirm the stray "Chleb" entry on the
-Dutch Breakfast list was deleted (leftover from a fixed pairing bug).
+**Stage 6 Phase A (STAGE_6_PLAN.md) is implemented and deployed — needs on-phone
+verification (§2.5 of that plan).** What shipped in v29, in plan order:
+
+- **Step ⓪ — orphaned-photo bug fixed:** `deleteWordAndCleanup(wordId)` in db.js
+  deletes a word, its recordings, and its photos-store blob (only when no other word —
+  e.g. the paired-language twin — still references the same photoId) in ONE IndexedDB
+  transaction. Both admin deletion paths use it.
+- **DB v3:** new `people` and `recordings` stores (recordings created now, used from
+  Phase B; deterministic ids, personId + wordId indexes). `savePerson` enforces one
+  default voice per language; `deletePersonAndCleanup` cascades recordings.
+- **Backups are formatVersion 3** (people + recordings included; v1/v2 files still
+  import; restore summary reports people/recordings counts).
+- **People & voices screens** (Settings → 👪): per-language people list with
+  default-voice/in-collage badges and an "add yourself first" hint; person editor with
+  name, language, photo, 4s intro clip, collage + default-voice toggles.
+- **Child mode (js/child.js):** big ▶ Play button on the home screen → flag screen
+  (only playable languages) → photo category tiles → default-voice person's full-screen
+  intro ("Nederlands!"/"Polski!") → family collage (5s, tap-skips) → normal session.
+  Degrades per contracts C2/C10: with no people configured everything still plays,
+  intro/collage just skip. Parent gate extracted to shared js/gate.js (contract C8);
+  the per-category ▶ Start buttons are untouched (decision 5).
+
+**Verified locally (desktop browser, fresh profile):** silent v3 upgrade, whole child
+flow end-to-end, shared-photo deletion semantics, default-voice exclusivity, person
+delete cascade, backup v3 round-trip. **Still to verify on the real iPhone:** the §2.5
+checklist — especially force-quit + reopen with real data intact, then a real Papa
+person + collage people, and a fresh backup.
+
+**Also still unconfirmed on-device from v28:** (1) Dutch categories read Ontbijt /
+Kleren / Speelgoed; (2) the stray "Chleb" entry on the Dutch Ontbijt list is gone.
+
+**Next after phone verification:** Stage 6 Phase B (multi-voice playback + face pick +
+in-app recording for another person), then Phase C (remote recording requests).
 
 **Shipped and verified on the real iPhone, 9 July (v23–v28):**
 - **Game-loop polish from real use:** photo taps can't stack/loop audio anymore (one

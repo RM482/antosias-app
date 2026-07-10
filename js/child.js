@@ -1,8 +1,8 @@
-import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=28';
-import { unlockAudio, playBlobSequence } from './media.js?v=28';
-import { el, onTap } from './dom.js?v=28';
-import { startSession } from './session.js?v=28';
-import { mountParentGate } from './gate.js?v=28';
+import { getAll, isSessionEligible, attachPhotos, LANGUAGES } from './db.js?v=29';
+import { unlockAudio, playBlobSequence } from './media.js?v=29';
+import { el, onTap } from './dom.js?v=29';
+import { startSession } from './session.js?v=29';
+import { mountParentGate } from './gate.js?v=29';
 
 // Child-first flow (Stage 6, canonical order per STAGE_6_PLAN.md contract C1):
 // Play → flag → category tiles → (face pick, Phase B) → intro → collage →
