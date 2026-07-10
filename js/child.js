@@ -1,14 +1,17 @@
-import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=35';
-import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=35';
-import { el, onTap } from './dom.js?v=35';
-import { startSession } from './session.js?v=35';
-import { mountParentGate } from './gate.js?v=35';
+import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=36';
+import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=36';
+import { el, onTap } from './dom.js?v=36';
+import { startSession } from './session.js?v=36';
+import { mountParentGate } from './gate.js?v=36';
 
-// Child-first flow (Stage 6, canonical order per STAGE_6_PLAN.md contract C1):
-// Play → flag → category tiles → (face pick, Phase B) → intro → collage →
-// session. Renders into the existing #session overlay so session.js's
-// toddler-proofing (touchmove/pinch blockers, no text selection) already
-// covers every screen. All buttons use onTap (toddler rule — see CLAUDE.md).
+// Child-first flow (Stage 6; reordered 10 July 2026 per parent request —
+// supersedes STAGE_6_PLAN.md contract C1's original order):
+// Play → flag → HOST INTRO ("Nederlands!" with the default person's photo) →
+// category tiles → (face pick) → family-voice intro (only when a non-default
+// voice was picked — the host's own intro never repeats) → collage → session.
+// Renders into the existing #session overlay so session.js's toddler-proofing
+// (touchmove/pinch blockers, no text selection) already covers every screen.
+// All buttons use onTap (toddler rule — see CLAUDE.md).
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -84,7 +87,13 @@ function renderFlagScreen(state, playableLanguages) {
     const btn = el('button', { type: 'button', class: 'child-flag-btn', text: l.flag, 'aria-label': l.label });
     onTap(btn, () => {
       unlockAudio();
-      renderTileScreen(state, l.code);
+      // The language moment comes FIRST: the default person's photo saying
+      // "Nederlands!" right after the flag, before any category choice.
+      // renderIntro skips itself when there's no default person (or they have
+      // neither photo nor intro clip) — the tiles never wait on setup (C2).
+      renderIntro(state, l.code, defaultPersonFor(state, l.code), () =>
+        renderTileScreen(state, l.code)
+      );
     });
     screen.appendChild(btn);
   }
@@ -142,13 +151,23 @@ function beginSession(state, language, category) {
   }
 }
 
+// The language's default-voice person — the "host" whose photo + intro open
+// child mode right after the flag.
+function defaultPersonFor(state, language) {
+  return state.people.find((p) => p.language === language && p.isDefaultVoice) || null;
+}
+
 function proceedWithVoice(state, language, category, voice) {
   const person = voice.person; // null for a default voice with no person record
-  renderIntro(state, language, person, () =>
+  const afterIntro = () =>
     renderCollage(state, language, () =>
       startSession(category.id, { personId: person ? person.id : null })
-    )
-  );
+    );
+  // The host's intro already played right after the flag — never repeat it.
+  // A family voice picked on the face screen still gets their own greeting
+  // here (it's their session), then the collage.
+  if (voice.isDefault) afterIntro();
+  else renderIntro(state, language, person, afterIntro);
 }
 
 // --- 3. Face pick: whose voice does she want? -----------------------------------

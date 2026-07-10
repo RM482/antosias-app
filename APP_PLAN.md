@@ -22,17 +22,16 @@
   DB checked) → remove 1 → no orphan blob left in the photos store → full
   session showed a real image for the extras-only word. Zero console errors.
 
-**⏭️ QUEUED — child-mode flow reorder (parent request, 10 July 2026):**
-The intro should come BEFORE the category choice. Current child flow (child.js,
-contract C1): flag → category tiles → face pick → host intro ("Nederlands!" with
-the parent's photo) → collage → session. Wanted: flag → **host intro** → category
-tiles → … . Think through: the intro is per-language (fine, language is known at
-flag tap) but the face pick is per-category (voices vary by category coverage) —
-the simplest correct order is flag → default-voice intro → tiles → face pick →
-collage → session, keeping C2/C10 degradation (no person/photo/intro → skip
-silently). Check whether the chosen person's intro should then ALSO play after
-face pick (probably yes, brief, it's "their" greeting) or only the default one up
-front.
+**v36 shipped — child-mode flow reorder (parent request, 10 July 2026):**
+New order: flag → **host intro** (default person's photo + "Nederlands!"/
+"Polski!") → category tiles → face pick (>1 voice) → **family-voice intro only
+when a non-default voice was picked** (the host's own intro never repeats) →
+collage → session. Supersedes STAGE_6_PLAN contract C1's original order;
+CLAUDE.md updated. C2/C10 degradation kept: no default person (or no
+photo/intro) → the flag goes straight to tiles, verified. Also verified in
+headless Chromium: created a default person with photo+intro, intro appears
+BEFORE tiles, tap-skip works, tile tap does not replay the intro. Zero console
+errors.
 
 **Also queued:** reward polish if real use asks (sticker book screen in child mode).
 
