@@ -11,10 +11,10 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=32';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=32';
-import { el, shuffle, onTap } from './dom.js?v=32';
-import { mountParentGate } from './gate.js?v=32';
+} from './db.js?v=33';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=33';
+import { el, shuffle, onTap } from './dom.js?v=33';
+import { mountParentGate } from './gate.js?v=33';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');

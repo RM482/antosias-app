@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=32';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=32';
-import { startSession, initSession } from './session.js?v=32';
-import { startChildMode } from './child.js?v=32';
-import { el } from './dom.js?v=32';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=32';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=33';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=33';
+import { startSession, initSession } from './session.js?v=33';
+import { startChildMode } from './child.js?v=33';
+import { el } from './dom.js?v=33';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=33';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -304,6 +304,28 @@ async function renderCategories() {
       );
     }
     screen.appendChild(list);
+  }
+
+  // Quick-record wizard entry: one button that walks through every word (in
+  // the active language) still missing its word audio — the fastest way to
+  // make a whole language playable, e.g. recording all the Polish seeds.
+  const missingAudio = words.filter((w) => w.excluded !== true && !w.audioWord);
+  if (missingAudio.length > 0) {
+    const catOrder = new Map(categories.map((c, i) => [c.id, i]));
+    missingAudio.sort(
+      (a, b) =>
+        (catOrder.get(a.categoryId) ?? 999) - (catOrder.get(b.categoryId) ?? 999) ||
+        (a.createdAt ?? 0) - (b.createdAt ?? 0)
+    );
+    screen.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: `🎙 Record missing audio (${missingAudio.length} word${missingAudio.length === 1 ? '' : 's'})`,
+        style: 'margin-top:8px;width:100%;',
+        onclick: () =>
+          push({ screen: 'quickRecord', wordIds: missingAudio.map((w) => w.id), index: 0 }),
+      })
+    );
   }
 
   // Both buttons produce the same export file; they differ in intent and
@@ -714,7 +736,7 @@ async function renderWordEdit({ categoryId, wordId }) {
         id: newId(),
         categoryId: null,
         language: otherLang,
-        article: '',
+        article: otherLang === 'nl' ? 'de' : '',
         word: '',
         photo: null,
         photoId: null,
@@ -725,7 +747,7 @@ async function renderWordEdit({ categoryId, wordId }) {
         realWorldPrompt: '',
         understandingStatus: 'not_introduced',
         speechStatus: 'none',
-        useEen: false,
+        useEen: otherLang === 'nl', // same countable-by-default as the main draft
         excluded: false,
         srsLevel: 0,
         nextReviewDate: null,
@@ -809,7 +831,7 @@ async function renderWordEdit({ categoryId, wordId }) {
       el('input', {
         type: 'text',
         value: draft.phraseText,
-        placeholder: 'e.g. Dit is een banaan',
+        placeholder: isDutch ? 'e.g. Dit is een banaan' : 'e.g. To jest banan',
         oninput: (e) => (draft.phraseText = e.target.value),
       }),
     ])
@@ -821,7 +843,7 @@ async function renderWordEdit({ categoryId, wordId }) {
       el('input', {
         type: 'text',
         value: draft.realWorldPrompt,
-        placeholder: 'e.g. Give Papa de banaan',
+        placeholder: isDutch ? 'e.g. Give Papa de banaan' : 'e.g. Daj Papie bananę',
         oninput: (e) => (draft.realWorldPrompt = e.target.value),
       }),
     ])
@@ -852,6 +874,14 @@ async function renderWordEdit({ categoryId, wordId }) {
     ])
   );
 
+  // When the *paired* word is the Dutch one (i.e. this is a Polish word),
+  // it needs the same grammar controls as a Dutch main word: the de/het
+  // article picker and the "een" correction toggle. Without them the twin
+  // used to be saved articleless with an explicit useEen=false.
+  let pairedEenSeg = null;
+  let pairedEenTouched = false;
+  let pairedLabelPreview = null;
+
   screen.appendChild(
     el('div', { class: 'field' }, [
       el('label', { text: `${otherLangLabel} word` }),
@@ -861,10 +891,51 @@ async function renderWordEdit({ categoryId, wordId }) {
         placeholder: otherLang === 'pl' ? 'e.g. banan' : 'e.g. banaan',
         oninput: (e) => {
           pairedDraft.word = e.target.value;
+          if (pairedEenSeg && !pairedEenTouched) {
+            pairedDraft.useEen = guessUsesEen(pairedDraft.word);
+            pairedEenSeg.setValue(pairedDraft.useEen ? 'een' : 'none');
+          }
+          if (pairedLabelPreview) pairedLabelPreview.textContent = wordLabel(pairedDraft) || ' ';
         },
       }),
     ])
   );
+
+  if (otherLang === 'nl') {
+    buildSegmented(screen, {
+      label: 'Article',
+      options: [
+        { label: 'de', value: 'de' },
+        { label: 'het', value: 'het' },
+        { label: '(none)', value: '' },
+      ],
+      value: pairedDraft.article,
+      onChange: (v) => {
+        pairedDraft.article = v;
+        if (pairedLabelPreview) pairedLabelPreview.textContent = wordLabel(pairedDraft) || ' ';
+      },
+    });
+
+    // Same auto-guess-until-touched behavior as the main Dutch draft. An
+    // existing twin's saved boolean counts as an explicit choice.
+    pairedEenTouched = !!(pairedWord && typeof pairedWord.useEen === 'boolean');
+    pairedDraft.useEen = usesEen(pairedDraft);
+    pairedEenSeg = buildSegmented(screen, {
+      label: 'Naming it (“dit is …”)',
+      options: [
+        { label: 'een …', value: 'een' },
+        { label: 'no “een”', value: 'none' },
+      ],
+      value: pairedDraft.useEen ? 'een' : 'none',
+      onChange: (v) => {
+        pairedDraft.useEen = v === 'een';
+        pairedEenTouched = true;
+      },
+    });
+
+    pairedLabelPreview = el('div', { class: 'label-preview', text: wordLabel(pairedDraft) || ' ' });
+    screen.appendChild(pairedLabelPreview);
+  }
 
   screen.appendChild(
     el('div', { class: 'field' }, [
@@ -974,10 +1045,15 @@ async function renderWordEdit({ categoryId, wordId }) {
             if (existingByName) {
               pairedDraft = {
                 ...existingByName,
-                phraseText: pairedDraft.phraseText,
-                realWorldPrompt: pairedDraft.realWorldPrompt,
+                // Blank form fields keep the existing word's values — saving a
+                // Polish word with an untouched Dutch section must not wipe
+                // the Dutch twin's phrase/prompt.
+                phraseText: pairedDraft.phraseText || existingByName.phraseText,
+                realWorldPrompt: pairedDraft.realWorldPrompt || existingByName.realWorldPrompt,
                 audioWord: pairedDraft.audioWord || existingByName.audioWord,
                 audioPhrase: pairedDraft.audioPhrase || existingByName.audioPhrase,
+                // Dutch grammar set in this form wins over the old record's
+                ...(otherLang === 'nl' ? { article: pairedDraft.article, useEen: pairedDraft.useEen } : {}),
               };
             } else if (category) {
               // Brand-new paired word: put it in the other language's
@@ -1724,6 +1800,138 @@ async function renderPersonRecordWords(view) {
   appEl.appendChild(screen);
 }
 
+// --- Quick-record wizard ---------------------------------------------------
+// Steps through every word still missing its word audio (snapshotted when the
+// wizard opened, so recording one doesn't renumber the rest — you can still go
+// back and re-listen/re-record). One screen per word: photo, label, record.
+// Every recording saves onto the word the moment it's made; stopping halfway
+// loses nothing.
+async function renderQuickRecord(view) {
+  const wordIds = view.wordIds || [];
+  const index = view.index ?? 0;
+  if (wordIds.length === 0 || index >= wordIds.length) {
+    pop(); // finished the last word (or nothing left to record)
+    return;
+  }
+  const word = await get('words', wordIds[index]);
+  if (!word) {
+    // Deleted since the wizard opened — drop it from the run and re-render
+    // at the same index (which is now the next word).
+    view.wordIds = wordIds.filter((id) => id !== wordIds[index]);
+    if (view.index >= view.wordIds.length) view.index = Math.max(0, view.wordIds.length - 1);
+    render();
+    return;
+  }
+  const category = await get('categories', word.categoryId);
+  await attachPhotos([word]);
+  const label = wordLabel(word);
+
+  const draft = {
+    audioWord: word.audioWord || null,
+    audioPhrase: word.audioPhrase || null,
+  };
+  async function save() {
+    try {
+      // Re-fetch so we never overwrite fields changed elsewhere since this
+      // screen rendered; only the audio (and updatedAt) comes from the draft.
+      const fresh = await get('words', word.id);
+      if (!fresh) return;
+      await saveWord({
+        ...fresh,
+        audioWord: draft.audioWord,
+        audioPhrase: draft.audioPhrase || null,
+        updatedAt: Date.now(),
+      });
+    } catch (err) {
+      alert(`Could not save the recording: ${errText(err)}`);
+    }
+  }
+
+  appEl.appendChild(
+    topbar({ title: `🎙 ${index + 1} / ${wordIds.length}`, onBack: () => pop() })
+  );
+  const screen = el('div', { class: 'screen' });
+
+  if (category) {
+    screen.appendChild(
+      el('p', {
+        class: 'settings-note',
+        style: 'text-align:center;',
+        text: `${category.emoji || '📁'} ${category.name}`,
+      })
+    );
+  }
+
+  const thumb = el('div', { class: 'thumb large', style: 'margin:0 auto 10px;' });
+  if (word.photo) {
+    const img = el('img', { alt: '' });
+    img.src = URL.createObjectURL(word.photo);
+    thumb.appendChild(img);
+  } else {
+    thumb.textContent = word.placeholderEmoji || '🔤';
+  }
+  screen.appendChild(thumb);
+  screen.appendChild(
+    el('div', { class: 'label-preview', style: 'text-align:center;margin-bottom:14px;', text: label })
+  );
+
+  buildAudioControl(screen, {
+    title: `Say the word: “${label}”`,
+    maxMs: 6000,
+    getBlob: () => draft.audioWord,
+    setBlob: (b) => {
+      draft.audioWord = b;
+      save();
+    },
+    required: true,
+  });
+
+  if (word.phraseText) {
+    buildAudioControl(screen, {
+      title: `Optional phrase — “${word.phraseText}”`,
+      maxMs: 15000,
+      getBlob: () => draft.audioPhrase,
+      setBlob: (b) => {
+        draft.audioPhrase = b;
+        save();
+      },
+      required: false,
+    });
+  }
+
+  // Same stepper pattern as the person recorder: mutate this view's index in
+  // place and re-render, so Back pops to the home screen in one step.
+  const nav = el('div', { class: 'form-actions' });
+  const isLast = index === wordIds.length - 1;
+  nav.appendChild(
+    el('button', {
+      text: isLast ? 'Done' : 'Next word ›',
+      onclick: () => {
+        if (isLast) {
+          pop();
+        } else {
+          view.index = index + 1;
+          render();
+        }
+      },
+    })
+  );
+  if (index > 0) {
+    nav.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: '‹ Previous word',
+        onclick: () => {
+          view.index = index - 1;
+          render();
+        },
+      })
+    );
+  }
+  screen.appendChild(nav);
+  appEl.appendChild(screen);
+}
+
 async function renderPersonRecordPhrases({ personId }) {
   const person = await get('people', personId);
   if (!person) {
@@ -1959,6 +2167,7 @@ async function render() {
   if (view.screen === 'settings') return renderSettings();
   if (view.screen === 'people') return renderPeople();
   if (view.screen === 'personEdit') return renderPersonEdit(view);
+  if (view.screen === 'quickRecord') return renderQuickRecord(view);
   if (view.screen === 'personRecord') return renderPersonRecord(view);
   if (view.screen === 'personRecordWords') return renderPersonRecordWords(view);
   if (view.screen === 'personRecordPhrases') return renderPersonRecordPhrases(view);
@@ -1991,7 +2200,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=32');
+    const { startRecordingPage } = await import('./record.js?v=33');
     startRecordingPage(recordGistId);
     return;
   }

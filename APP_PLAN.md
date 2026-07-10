@@ -1,6 +1,40 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, night) — live app `?v=32`; ALL of Stage 6 deployed
+## Status (as of 10 July 2026, late night) — live app `?v=33`
+
+**v33 shipped (all stages remain code-complete):**
+
+- **Quick-record wizard:** home screen gains "🎙 Record missing audio (N words)"
+  (only when N > 0, active language only). Steps through every word missing its
+  word audio — photo + label + record, optional phrase step when phraseText
+  exists — saving onto the word instantly (re-fetches the record before saving so
+  it never clobbers concurrent edits). Word list is snapshotted at wizard start
+  so recording doesn't renumber the run; deleted words are skipped. This is the
+  fast path for recording all the Polish seed audio (Stage 5's remaining content
+  work).
+- **Bug fix — Dutch grammar from the Polish editor:** the "Also in Dutch" section
+  of a Polish word now has the de/het article picker, the een/no-een toggle
+  (auto-guessed until touched, same as the main Dutch form), and a live
+  "het banaan" preview. Previously a Dutch twin created from the Polish side was
+  saved articleless with an explicit `useEen: false`. The merge-into-existing-name
+  path now carries article/useEen from the form, and blank phrase/prompt fields no
+  longer wipe the existing twin's values (pre-existing bug). Polish words also get
+  Polish placeholder examples instead of Dutch ones.
+- **Verified end-to-end in headless Chromium** (fake mic; full record→save→count
+  paths, both features, zero console errors). Recipe persisted in
+  `.claude/skills/verify/SKILL.md`. Twins created from the Polish side *before*
+  v33 still have no article — re-open them from either side and set it.
+
+**⏭️ NEXT (queued, in order):**
+1. **Reward system for Antosia** (user-selected next feature): celebration when a
+   session/word is completed — confetti, collectible stickers, or similar. Not
+   designed yet; design before building (keep it calm — no loud gamification, and
+   it must degrade gracefully mid-session like everything else in child mode).
+2. On-phone verification below (unchanged; categories confirmed Dutch ✅).
+
+---
+
+## Previous status (10 July 2026, night) — `?v=32`; ALL of Stage 6 deployed
 
 **Stage 6 is code-complete: Phases A, B, and C are all deployed.** Phase C finished
 its local verification and shipped as v32. Desktop-verified: normal startup unaffected
