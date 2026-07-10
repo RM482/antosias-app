@@ -1,5 +1,5 @@
 const DB_NAME = 'antosia-app';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -31,6 +31,19 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('photos')) {
         db.createObjectStore('photos', { keyPath: 'id' });
+      }
+      // v3 (Stage 6): family members. `people` holds who they are (photo +
+      // intro clip inline — never shared between records); `recordings` holds
+      // their per-word and carrier-phrase audio, with deterministic ids
+      // (`${personId}:word:${wordId}` / `${personId}:carrier:${language}:${name}`)
+      // so a re-record or re-import is an overwrite, never a duplicate.
+      if (!db.objectStoreNames.contains('people')) {
+        db.createObjectStore('people', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('recordings')) {
+        const store = db.createObjectStore('recordings', { keyPath: 'id' });
+        store.createIndex('personId', 'personId');
+        store.createIndex('wordId', 'wordId');
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -143,6 +156,54 @@ export async function deleteWordAndCleanup(wordId) {
     t.oncomplete = () => resolve();
     t.onerror = () => reject(storageError(t.error, 'deleting a word'));
     t.onabort = () => reject(storageError(t.error, 'deleting a word (transaction aborted)'));
+  });
+}
+
+// --- People (Stage 6: family members whose voices/photos appear in child mode) ---
+
+// Saves a person, enforcing at most one default voice per language: marking
+// someone as the default clears the flag on whoever held it before, inside
+// the same transaction so an interruption can't leave two defaults behind.
+export async function savePerson(person) {
+  const db = await openDB();
+  const t = db.transaction('people', 'readwrite');
+  const store = t.objectStore('people');
+  if (person.isDefaultVoice) {
+    const allReq = store.getAll();
+    allReq.onsuccess = () => {
+      for (const p of allReq.result) {
+        if (p.id !== person.id && p.language === person.language && p.isDefaultVoice) {
+          store.put({ ...p, isDefaultVoice: false, updatedAt: Date.now() });
+        }
+      }
+      store.put(person);
+    };
+  } else {
+    store.put(person);
+  }
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve(person);
+    t.onerror = () => reject(storageError(t.error, 'saving a person'));
+    t.onabort = () => reject(storageError(t.error, 'saving a person (transaction aborted, possibly out of storage space)'));
+  });
+}
+
+// Deletes a person and every recording of their voice, in one transaction
+// (contract C4). Word records are untouched — the default parent's audio
+// lives on the words themselves, not in `recordings`.
+export async function deletePersonAndCleanup(personId) {
+  const db = await openDB();
+  const t = db.transaction(['people', 'recordings'], 'readwrite');
+  t.objectStore('people').delete(personId);
+  const recStore = t.objectStore('recordings');
+  const keysReq = recStore.index('personId').getAllKeys(personId);
+  keysReq.onsuccess = () => {
+    for (const key of keysReq.result) recStore.delete(key);
+  };
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(storageError(t.error, 'deleting a person'));
+    t.onabort = () => reject(storageError(t.error, 'deleting a person (transaction aborted)'));
   });
 }
 

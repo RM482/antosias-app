@@ -369,7 +369,10 @@ async function renderCategories() {
       }
       const result = await importPayload(payload);
       const skippedNote = result.skipped ? ` (${result.skipped} unusable entr${result.skipped === 1 ? 'y' : 'ies'} skipped)` : '';
-      alert(`Restored ${result.words} word${result.words === 1 ? '' : 's'} and ${result.categories} categor${result.categories === 1 ? 'y' : 'ies'}${skippedNote}.`);
+      const peopleNote = result.people || result.recordings
+        ? `, ${result.people} ${result.people === 1 ? 'person' : 'people'} and ${result.recordings} voice recording${result.recordings === 1 ? '' : 's'}`
+        : '';
+      alert(`Restored ${result.words} word${result.words === 1 ? '' : 's'} and ${result.categories} categor${result.categories === 1 ? 'y' : 'ies'}${peopleNote}${skippedNote}.`);
       render();
     } catch (err) {
       alert(`Restore failed: ${errText(err)}`);

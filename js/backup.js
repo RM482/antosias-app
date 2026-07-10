@@ -8,8 +8,10 @@ import { getAll, putAllTransactional } from './db.js?v=28';
 // IndexedDB transaction auto-commits the moment you await anything
 // non-IndexedDB, so all decoding must finish before the write begins.)
 // v1: photos inline on each word. v2 adds the shared photos store (words may
-// carry a photoId instead of an inline photo). v1 files still import fine.
-const SUPPORTED_FORMAT_VERSIONS = [1, 2];
+// carry a photoId instead of an inline photo). v3 adds `people` and
+// `recordings` (Stage 6 family voices). Older files still import fine — the
+// missing sections just default to empty.
+const SUPPORTED_FORMAT_VERSIONS = [1, 2, 3];
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -26,10 +28,12 @@ async function dataUrlToBlob(dataUrl) {
 }
 
 export async function buildExportPayload() {
-  const [categories, words, photos] = await Promise.all([
+  const [categories, words, photos, people, recordings] = await Promise.all([
     getAll('categories'),
     getAll('words'),
     getAll('photos'),
+    getAll('people'),
+    getAll('recordings'),
   ]);
   const exportedWords = await Promise.all(
     words.map(async (w) => ({
@@ -44,12 +48,29 @@ export async function buildExportPayload() {
   const exportedPhotos = await Promise.all(
     photos.map(async (p) => ({ id: p.id, blob: p.blob ? await blobToDataUrl(p.blob) : null }))
   );
+  const exportedPeople = await Promise.all(
+    people.map(async (p) => ({
+      ...p,
+      photo: p.photo ? await blobToDataUrl(p.photo) : null,
+      introAudio: p.introAudio ? await blobToDataUrl(p.introAudio) : null,
+    }))
+  );
+  const exportedRecordings = await Promise.all(
+    recordings.map(async (r) => ({
+      ...r,
+      audioWord: r.audioWord ? await blobToDataUrl(r.audioWord) : null,
+      audioPhrase: r.audioPhrase ? await blobToDataUrl(r.audioPhrase) : null,
+      blob: r.blob ? await blobToDataUrl(r.blob) : null,
+    }))
+  );
   return {
-    formatVersion: 2,
+    formatVersion: 3,
     exportedAt: Date.now(),
     categories,
     words: exportedWords,
     photos: exportedPhotos,
+    people: exportedPeople,
+    recordings: exportedRecordings,
   };
 }
 
@@ -135,6 +156,13 @@ export async function importPayload(payload) {
   const usablePhotos = (payload.photos || []).filter(
     (p) => p && typeof p.id === 'string' && typeof p.blob === 'string'
   );
+  // people/recordings are absent in v1/v2 files.
+  const usablePeople = (payload.people || []).filter(
+    (p) => p && typeof p.id === 'string' && typeof p.name === 'string'
+  );
+  const usableRecordings = (payload.recordings || []).filter(
+    (r) => r && typeof r.id === 'string' && typeof r.personId === 'string'
+  );
   const skipped =
     (payload.categories.length - categories.length) + (payload.words.length - usableWords.length);
 
@@ -149,9 +177,30 @@ export async function importPayload(payload) {
   const photos = await Promise.all(
     usablePhotos.map(async (p) => ({ id: p.id, blob: await dataUrlToBlob(p.blob) }))
   );
+  const people = await Promise.all(
+    usablePeople.map(async (p) => ({
+      ...p,
+      photo: p.photo ? await dataUrlToBlob(p.photo) : null,
+      introAudio: p.introAudio ? await dataUrlToBlob(p.introAudio) : null,
+    }))
+  );
+  const recordings = await Promise.all(
+    usableRecordings.map(async (r) => ({
+      ...r,
+      audioWord: r.audioWord ? await dataUrlToBlob(r.audioWord) : null,
+      audioPhrase: r.audioPhrase ? await dataUrlToBlob(r.audioPhrase) : null,
+      blob: r.blob ? await dataUrlToBlob(r.blob) : null,
+    }))
+  );
 
-  await putAllTransactional({ categories, words, photos });
-  return { categories: categories.length, words: words.length, skipped };
+  await putAllTransactional({ categories, words, photos, people, recordings });
+  return {
+    categories: categories.length,
+    words: words.length,
+    people: people.length,
+    recordings: recordings.length,
+    skipped,
+  };
 }
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public
