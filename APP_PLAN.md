@@ -1,15 +1,110 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, latest) — live app `?v=35`
+## Status (as of 10 July 2026, end of session) — live app `?v=36`
 
-**v35 shipped — multiple photos per word (parent request):**
+**Everything is code-complete, deployed, and locally verified. Nothing is
+half-built. The whole outstanding list is ON-PHONE TESTING (§ below).**
 
-- Word editor gains "More photos of the same thing (optional)": add via one
-  ＋ Add photo button (iOS picker offers camera/library), thumbnails shown, tap a
-  thumbnail (+ confirm) to remove. Persisted on Save only, like the whole form.
-- Data shape per the design sketch: `word.photoId` stays the single primary
-  (twin pairing, list/request thumbnails untouched); `word.extraPhotoIds: []`
-  rides on the word record, blobs in the existing `photos` store. No DB bump.
+Four features shipped this session (v33–v36), each verified end-to-end in
+headless Chromium (fake mic, real clicks, zero console errors) and pushed to
+`main` (= deployed to GitHub Pages):
+
+| v | What |
+|---|---|
+| v33 | Quick-record wizard + Dutch article/een controls in the Polish editor |
+| v34 | Reward system: confetti on correct taps, collectible session stickers |
+| v35 | Multiple photos per word, rotated per appearance |
+| v36 | Child-mode flow reorder: host intro before the category tiles |
+
+**⏭️ NEXT SESSION — do this first: the on-phone testing checklist below.** After
+that, the only queued idea is *reward polish if real use asks for it* (e.g. a
+sticker-book screen in child mode). No other work is pending.
+
+**Local verification is now easy:** `.claude/skills/verify/SKILL.md` has the
+recipe (static server + headless Chromium with a fake mic, gotchas included).
+
+---
+
+## ON-PHONE TESTING CHECKLIST (nothing here has been tested on the real iPhone)
+
+**Before anything: force-quit the app on the phone and reopen it** — that's how
+it picks up v36. (Home Screen icon only; never delete it, never clear Safari
+data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it now
+includes people and recordings.
+
+### 1. Quick-record wizard (v33) — also the fast path for Polish audio
+Home screen → "🎙 Record missing audio (N words)" → step through: photo + word +
+Record → Next. Recordings save instantly; Back mid-way loses nothing. The home
+count should drop as words get audio. Do this on the 🇵🇱 flag with Mama to fill
+in Polish audio (Stage 5's remaining *content* work).
+
+### 2. Dutch article fix from the Polish editor (v33)
+🇵🇱 → open a Polish word → "Also in Dutch" section now has the de/het picker,
+the "een" toggle, and a live "de banaan" preview. **Note:** Dutch twins created
+from the Polish side *before* v33 were saved with no article — open those once
+and set de/het.
+
+### 3. Multiple photos per word (v35)
+Open a word → "More photos of the same thing (optional)" → ＋ Add photo (2–3
+different paintings / cups / balls) → Save → reopen (they persist) → run a
+session and confirm the picture changes between appearances. Tap a thumbnail to
+remove one.
+
+### 4. Rewards (v34)
+Run a full session: confetti on each correct tap; the end screen shows a new
+sticker + the growing shelf. A second session gives a different sticker. Exiting
+early via the parent gate earns nothing (by design).
+
+### 5. Child-mode flow (v36) — needs a default person first
+Settings → 👪 People & voices → add yourself: name, photo, 4s intro clip
+("Nederlands!"), **Default voice = Yes**. Then ▶ Play → flag → **your photo +
+"Nederlands!" appears BEFORE the category tiles** → tiles → session. The intro
+must not repeat after picking a category.
+
+### 6. Family voices — Phase B (never tested on the phone)
+Add a non-default person → "🎙 Record words in X's voice" → record 2–3 words
+(silly accent is fine) → ▶ Play → face pick appears → session plays in that
+voice. Then take a fresh backup (it now carries recordings).
+
+### 7. Remote recording — Phase C (never tested on the phone)
+Build a request on the phone → AirDrop the file to the Mac →
+`~/.local/bin/gh gist create <file>` → open
+`https://rm482.github.io/antosias-app/?record=<gistId>` in a FRESH browser
+profile (a private window is fine — the page uses no storage; confirm no
+`antosia-app` database is created, and that opening the plain app URL afterwards
+still seeds as a first-open) → record → "📤 Versturen" → import the file via
+Settings → "📥 Import family recordings" → face pick offers them → **import the
+same file again → no duplicates**. **Test once from an Android device BEFORE
+asking the whole family** (codec risk — the import's decode-check reports
+unplayable clips by name).
+
+### 8. Force-quit + reopen with real data intact
+The perennial check: after all of the above, force-quit and reopen — photos,
+audio, stickers, people all still there.
+
+✅ Already confirmed on-device: Dutch category names read Ontbijt / Kleren /
+Speelgoed.
+
+---
+
+## Shipped this session — details
+
+**v36 — child-mode flow reorder (parent request):**
+New order: flag → **host intro** (default person's photo + "Nederlands!"/
+"Polski!") → category tiles → face pick (>1 voice) → **family-voice intro only
+when a non-default voice was picked** (the host's own intro never repeats) →
+collage → session. Supersedes STAGE_6_PLAN contract C1's original order;
+CLAUDE.md updated. C2/C10 degradation kept: no default person (or no
+photo/intro) → the flag goes straight to tiles, verified.
+
+**v35 — multiple photos per word (parent request):**
+
+- Word editor gains "More photos of the same thing (optional)": ＋ Add photo
+  (iOS picker offers camera/library), thumbnails shown, tap a thumbnail
+  (+ confirm) to remove. Persisted on Save only, like the whole form.
+- `word.photoId` stays the single primary (twin pairing, list/request thumbnails
+  untouched); `word.extraPhotoIds: []` rides on the word record, blobs in the
+  existing `photos` store. No DB version bump.
 - `attachPhotos` loads extras onto `word.extraPhotos`; sessions' `wordVisual`
   picks randomly from primary+extras on every appearance (listen stage, game
   tiles, distractors) — so she learns the concept, not one object.
@@ -18,24 +113,8 @@
   a word's photo ids with the same shared-reference check.
 - Backups already export/import the whole photos store → extras included, no
   format change.
-- Verified end-to-end in headless Chromium: add 2 → save → reopen (persisted;
-  DB checked) → remove 1 → no orphan blob left in the photos store → full
-  session showed a real image for the extras-only word. Zero console errors.
 
-**v36 shipped — child-mode flow reorder (parent request, 10 July 2026):**
-New order: flag → **host intro** (default person's photo + "Nederlands!"/
-"Polski!") → category tiles → face pick (>1 voice) → **family-voice intro only
-when a non-default voice was picked** (the host's own intro never repeats) →
-collage → session. Supersedes STAGE_6_PLAN contract C1's original order;
-CLAUDE.md updated. C2/C10 degradation kept: no default person (or no
-photo/intro) → the flag goes straight to tiles, verified. Also verified in
-headless Chromium: created a default person with photo+intro, intro appears
-BEFORE tiles, tap-skip works, tile tap does not replay the intro. Zero console
-errors.
-
-**Also queued:** reward polish if real use asks (sticker book screen in child mode).
-
-**v34 shipped — the reward system:**
+**v34 — the reward system:**
 
 - **Confetti** (`js/confetti.js`, new): pure-visual burst, `pointer-events:none`,
   attached to `#session` itself so it survives the stage re-render at 700ms after
@@ -50,32 +129,8 @@ errors.
   pop-in sticker reveal + a shelf of the last 8 (+N counter) + a big confetti
   burst. Award/render degrades silently on any storage failure (spirit of C2);
   the parent observation list never waits on it.
-- Verified end-to-end in headless Chromium: two full sessions played through;
-  confetti on each correct tap; different sticker per session; shelf grew and
-  persisted (checked inside IndexedDB); zero console errors.
 
-**⏭️ QUEUED NEXT — multiple photos per word (parent request, 10 July 2026):**
-e.g. three different paintings for "schilderij" so she learns the concept, not
-one specific object; the session should rotate/alternate between them. **Design
-carefully before building — this touches delicate machinery:**
-- Twin pairing finds a word's translation *by shared `photoId`* (admin.js) — the
-  primary photo link must stay singular or pairing needs a new mechanism.
-- Suggested shape: keep `word.photoId` (primary, used for pairing and thumbs) and
-  add `word.extraPhotoIds: []`; display paths (`wordVisual`, listen stage,
-  distractor tiles) pick per-appearance; `deleteWordAndCleanup` must cascade
-  extras (shared-photo refcount logic applies); backup export must include extra
-  photos; request-builder thumbnails can stay primary-only.
-- No DB version bump needed if extras ride on the word record as ids into the
-  existing `photos` store.
-
-**After that:** reward polish if real use asks for it (e.g. a sticker book screen
-in child mode).
-
----
-
-## Previous status (10 July 2026, late night) — `?v=33`
-
-**v33 shipped (all stages remain code-complete):**
+**v33 — quick-record wizard + Polish-editor grammar fix:**
 
 - **Quick-record wizard:** home screen gains "🎙 Record missing audio (N words)"
   (only when N > 0, active language only). Steps through every word missing its
@@ -98,13 +153,6 @@ in child mode).
   `.claude/skills/verify/SKILL.md`. Twins created from the Polish side *before*
   v33 still have no article — re-open them from either side and set it.
 
-**⏭️ NEXT (queued, in order):**
-1. **Reward system for Antosia** (user-selected next feature): celebration when a
-   session/word is completed — confetti, collectible stickers, or similar. Not
-   designed yet; design before building (keep it calm — no loud gamification, and
-   it must degrade gracefully mid-session like everything else in child mode).
-2. On-phone verification below (unchanged; categories confirmed Dutch ✅).
-
 ---
 
 ## Previous status (10 July 2026, night) — `?v=32`; ALL of Stage 6 deployed
@@ -117,20 +165,8 @@ protection); the request builder end-to-end (category toggles → 5KB request fi
 thumbnails + publish-instructions alert); and the builder's own output running the
 recording wizard through every screen in both Dutch and Polish.
 
-**⏭️ NEXT: on-phone verification, in this order:**
-1. **Phase B on the phone** (§3.5): add a non-default person, record 2–3 words via
-   "🎙 Record words" (silly accent is fine) → Play → face pick appears → session in
-   that voice. Then a fresh backup (now includes recordings).
-2. **Phase C end-to-end** (§4.4): build a request on the phone → AirDrop to Mac →
-   `~/.local/bin/gh gist create <file>` → open
-   `https://rm482.github.io/antosias-app/?record=<gistId>` in a FRESH browser profile
-   (private window is fine — the page uses no storage; confirm no `antosia-app`
-   database is created, and that opening the plain app URL afterwards still seeds as
-   first-open) → record → "📤 Versturen" → import the file via Settings → "📥 Import
-   family recordings" → face pick offers them → import the same file again → no
-   duplicates. Test once from an Android device BEFORE asking the whole family (codec
-   risk — the import's decode-check reports unplayable clips by name).
-3. Still unconfirmed on-device from v30: categories read Ontbijt/Kleren/Speelgoed.
+*(Its on-phone verification list has moved into the checklist at the top of this
+file — items 6 and 7.)*
 
 **What Phase C contains (shipped v32):**
 
