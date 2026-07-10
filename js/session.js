@@ -11,10 +11,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=33';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=33';
-import { el, shuffle, onTap } from './dom.js?v=33';
-import { mountParentGate } from './gate.js?v=33';
+} from './db.js?v=34';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=34';
+import { el, shuffle, onTap } from './dom.js?v=34';
+import { mountParentGate } from './gate.js?v=34';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=34';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -305,6 +306,9 @@ function renderGameStage(state) {
         answered = true;
         playCorrectFeedback(); // cuts off a still-playing correction/prompt
         btn.classList.add('correct');
+        // Confetti lives on #session (not the stage screen), so it keeps
+        // falling through the stage change below instead of vanishing at 700ms.
+        confettiBurstAt(sessionEl, btn);
         setTimeout(() => {
           state.stage = 'prompt';
           renderStep(state);
@@ -360,11 +364,60 @@ function renderPromptStage(state) {
   sessionEl.appendChild(screen);
 }
 
+// Sticker set Antosia collects, one per completed session. Unearned stickers
+// are picked first so the shelf keeps growing; once she has them all, any of
+// them can appear again. Stored in the meta store (no DB version bump), and
+// everything degrades silently: a storage hiccup must never break the end
+// screen (same spirit as contract C2).
+const STICKERS = ['🦄', '🌈', '⭐', '🐣', '🦋', '🐞', '🌻', '🐥', '🎈', '🚗', '🐟', '🍓', '🧸', '🎀', '🐰', '🐸', '🦆', '🍦', '☀️', '🐱'];
+
+async function awardSticker() {
+  let stickers = [];
+  try {
+    const rec = await get('meta', 'stickers');
+    stickers = (rec && Array.isArray(rec.value) && rec.value) || [];
+  } catch {
+    /* unreadable → treat as empty shelf */
+  }
+  const earned = new Set(stickers.map((s) => s.emoji));
+  const pool = STICKERS.filter((e) => !earned.has(e));
+  const emoji = (pool.length ? pool : STICKERS)[Math.floor(Math.random() * (pool.length ? pool.length : STICKERS.length))];
+  stickers = [...stickers, { emoji, earnedAt: Date.now() }];
+  try {
+    await put('meta', { key: 'stickers', value: stickers });
+  } catch {
+    /* not persisted, but still celebrated */
+  }
+  return { emoji, stickers };
+}
+
 function renderEndScreen(state) {
   // allow-scroll: the observation list can outgrow small screens, and the
   // session-wide touchmove blocker exempts this class.
   const screen = el('div', { class: 'session-screen end-stage allow-scroll' });
   screen.appendChild(el('div', { class: 'session-end-title', text: 'Great session!' }));
+
+  // Sticker reveal fills in asynchronously; the rest of the end screen never
+  // waits on it (and renders fine if awarding fails for any reason).
+  const stickerBox = el('div', { class: 'sticker-reveal' });
+  screen.appendChild(stickerBox);
+  if (!state.stickerAwarded) {
+    state.stickerAwarded = true;
+    awardSticker()
+      .then(({ emoji, stickers }) => {
+        stickerBox.appendChild(el('div', { class: 'sticker-big', text: emoji }));
+        stickerBox.appendChild(el('div', { class: 'sticker-caption', text: 'A new sticker!' }));
+        // Shelf: the most recent stickers, newest last, plus a count once it
+        // no longer fits — so she can point at what she's collected.
+        const recent = stickers.slice(-8).map((s) => s.emoji).join(' ');
+        const extra = stickers.length > 8 ? ` +${stickers.length - 8}` : '';
+        stickerBox.appendChild(
+          el('div', { class: 'sticker-shelf', text: `${recent}${extra}` })
+        );
+        confettiBurst(sessionEl, { count: 34 });
+      })
+      .catch(() => {});
+  }
 
   const wordNames = state.steps.map((s) => wordLabel(s.word)).join(', ');
   screen.appendChild(el('div', { class: 'session-end-summary', text: `Today's words: ${wordNames}` }));

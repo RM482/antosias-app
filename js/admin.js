@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=33';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=33';
-import { startSession, initSession } from './session.js?v=33';
-import { startChildMode } from './child.js?v=33';
-import { el } from './dom.js?v=33';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=33';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId } from './db.js?v=34';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=34';
+import { startSession, initSession } from './session.js?v=34';
+import { startChildMode } from './child.js?v=34';
+import { el } from './dom.js?v=34';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=34';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -2200,7 +2200,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=33');
+    const { startRecordingPage } = await import('./record.js?v=34');
     startRecordingPage(recordGistId);
     return;
   }

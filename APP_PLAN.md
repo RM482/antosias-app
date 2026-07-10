@@ -1,6 +1,46 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, late night) — live app `?v=33`
+## Status (as of 10 July 2026, latest) — live app `?v=34`
+
+**v34 shipped — the reward system:**
+
+- **Confetti** (`js/confetti.js`, new): pure-visual burst, `pointer-events:none`,
+  attached to `#session` itself so it survives the stage re-render at 700ms after
+  a correct tap; self-removes; honors `prefers-reduced-motion`. No audio — the
+  one-sound-at-a-time rule is untouched.
+- **Correct tap in the find-it game** → confetti burst from the tapped photo
+  (plus the existing "Goed zo!" clip).
+- **Session stickers:** every *completed* session (end screen reached; a
+  parent-gate exit mid-session earns nothing) awards one emoji sticker —
+  unearned ones first from a set of 20, repeats once she has them all. Stored in
+  the `meta` store under key `stickers` (no DB version bump). End screen shows a
+  pop-in sticker reveal + a shelf of the last 8 (+N counter) + a big confetti
+  burst. Award/render degrades silently on any storage failure (spirit of C2);
+  the parent observation list never waits on it.
+- Verified end-to-end in headless Chromium: two full sessions played through;
+  confetti on each correct tap; different sticker per session; shelf grew and
+  persisted (checked inside IndexedDB); zero console errors.
+
+**⏭️ QUEUED NEXT — multiple photos per word (parent request, 10 July 2026):**
+e.g. three different paintings for "schilderij" so she learns the concept, not
+one specific object; the session should rotate/alternate between them. **Design
+carefully before building — this touches delicate machinery:**
+- Twin pairing finds a word's translation *by shared `photoId`* (admin.js) — the
+  primary photo link must stay singular or pairing needs a new mechanism.
+- Suggested shape: keep `word.photoId` (primary, used for pairing and thumbs) and
+  add `word.extraPhotoIds: []`; display paths (`wordVisual`, listen stage,
+  distractor tiles) pick per-appearance; `deleteWordAndCleanup` must cascade
+  extras (shared-photo refcount logic applies); backup export must include extra
+  photos; request-builder thumbnails can stay primary-only.
+- No DB version bump needed if extras ride on the word record as ids into the
+  existing `photos` store.
+
+**After that:** reward polish if real use asks for it (e.g. a sticker book screen
+in child mode).
+
+---
+
+## Previous status (10 July 2026, late night) — `?v=33`
 
 **v33 shipped (all stages remain code-complete):**
 

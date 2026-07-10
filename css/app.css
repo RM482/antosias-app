@@ -1121,3 +1121,75 @@ p {
   font-size: 0.9rem;
   text-decoration: none;
 }
+
+/* --- Rewards: confetti + session stickers (v34) --- */
+
+.confetti-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 40; /* above stage content, below nothing interactive (no pointer events) */
+}
+
+.confetti-piece {
+  position: absolute;
+  width: 10px;
+  height: 14px;
+  border-radius: 2px;
+  opacity: 0.95;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translate(var(--dx), var(--dy)) rotate(var(--rot));
+    opacity: 0;
+  }
+}
+
+.sticker-reveal {
+  text-align: center;
+  min-height: 40px;
+  margin: 4px 0 10px;
+}
+
+.sticker-big {
+  font-size: 64px;
+  line-height: 1.1;
+  animation: sticker-pop 550ms cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+@keyframes sticker-pop {
+  from {
+    transform: scale(0.2) rotate(-16deg);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.sticker-caption {
+  font-weight: 700;
+  margin: 2px 0 8px;
+}
+
+.sticker-shelf {
+  font-size: 26px;
+  letter-spacing: 4px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 14px;
+  padding: 8px 12px;
+  display: inline-block;
+  max-width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sticker-big {
+    animation: none;
+  }
+}
