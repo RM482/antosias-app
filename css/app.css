@@ -555,6 +555,57 @@ p {
   outline: 5px solid #6fb366;
 }
 
+/* Test mode difficulty: 3 options shrink to fit one row on a phone;
+   4 options form a 2×2 grid. (2 options keep the practice layout.) */
+.session-options.count-3 .session-option-photo {
+  width: min(28vw, 150px);
+  height: min(28vw, 150px);
+}
+
+.session-options.count-4 {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  justify-content: center;
+}
+
+.session-options.count-4 .session-option-photo {
+  width: min(36vw, 170px);
+  height: min(36vw, 170px);
+}
+
+/* Test end screen: the first-tap score and per-word ✓/✗ list. */
+.test-score {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.test-result-list {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.test-result-row {
+  display: flex;
+  justify-content: space-between;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.test-ok {
+  color: #33632e;
+}
+
+.test-miss {
+  color: #b3423a;
+}
+
 .session-option.wiggle {
   animation: session-wiggle 0.4s ease;
 }

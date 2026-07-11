@@ -1,10 +1,11 @@
 # Test mode plan (v37)
 
-**Status: PLANNED — implementation starting 11 July 2026. Update this line as you go:
-[x] plan agreed  [ ] session.js core  [ ] admin.js entry UI  [ ] CSS  [ ] verified
-locally  [ ] version bumped + deployed. If you're a fresh session picking this up:
-read CLAUDE.md first, then this file top to bottom; check git log to see which steps
-already landed.**
+**Status: SHIPPED as v37 (11 July 2026).
+[x] plan agreed  [x] session.js core  [x] admin.js entry UI  [x] CSS  [x] verified
+locally (headless Chromium, stubbed mic: 3-option test scored 1/4 exactly matching
+the ✓/✗ rows and pre-toggles; practice unchanged; 4-option 2×2 screenshot; zero
+console errors)  [x] version bumped + deployed. Remaining: the on-phone checklist
+at the bottom of this file (also mirrored in APP_PLAN.md).**
 
 ## What the parent asked for (their words, 11 July 2026)
 

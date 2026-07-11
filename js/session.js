@@ -11,11 +11,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=36';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=36';
-import { el, shuffle, onTap } from './dom.js?v=36';
-import { mountParentGate } from './gate.js?v=36';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=36';
+} from './db.js?v=37';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=37';
+import { el, shuffle, onTap } from './dom.js?v=37';
+import { mountParentGate } from './gate.js?v=37';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=37';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -75,12 +75,20 @@ function selectSessionWords(eligibleInCategory, now = Date.now()) {
   return [...due, ...upcoming].slice(0, MAX_SESSION_WORDS);
 }
 
-function pickDistractor(target, sameCategoryPool, allEligiblePool) {
-  const sameCat = sameCategoryPool.filter((w) => w.id !== target.id);
-  if (sameCat.length > 0) return sameCat[Math.floor(Math.random() * sameCat.length)];
-  const anyOther = allEligiblePool.filter((w) => w.id !== target.id);
-  if (anyOther.length > 0) return anyOther[Math.floor(Math.random() * anyOther.length)];
-  return null;
+// Up to `count` DISTINCT wrong-answer words: same category first, topped up
+// from the rest of the language's eligible pool. Returns fewer when the pools
+// run dry (the game then simply shows fewer options — degrade, never block).
+function pickDistractors(target, sameCategoryPool, allEligiblePool, count) {
+  const picked = [];
+  const takeFrom = (pool) => {
+    const candidates = shuffle(
+      pool.filter((w) => w.id !== target.id && !picked.some((p) => p.id === w.id))
+    );
+    while (picked.length < count && candidates.length > 0) picked.push(candidates.pop());
+  };
+  takeFrom(sameCategoryPool);
+  takeFrom(allEligiblePool);
+  return picked;
 }
 
 export async function startSession(categoryId, opts = {}) {
@@ -142,21 +150,29 @@ export async function startSession(categoryId, opts = {}) {
     return;
   }
 
+  // Practice (default): listen stage → 2-choice game → real-world prompt.
+  // Test: straight to the game with `optionCount` choices (2–4), first tap
+  // scored, no listen/prompt stages — see TEST_MODE_PLAN.md.
+  const mode = opts.mode === 'test' ? 'test' : 'practice';
+  const optionCount = mode === 'test' ? Math.min(4, Math.max(2, opts.optionCount || 2)) : 2;
+
   const sessionWords = selectSessionWords(eligibleInCategory);
   const steps = sessionWords.map((word) => ({
     word,
-    distractor: pickDistractor(word, eligibleInCategory, allEligible),
+    distractors: pickDistractors(word, eligibleInCategory, allEligible, optionCount - 1),
   }));
 
   const state = {
     category,
     language,
+    mode,
     personId: opts.personId || null, // whose voice this session plays in
     steps,
     phrases, // this voice's carrier clips (meta store for the default voice)
     index: 0,
-    stage: 'listen', // 'listen' | 'game' | 'prompt'
+    stage: mode === 'test' ? 'game' : 'listen', // 'listen' | 'game' | 'prompt'
     observations: {}, // wordId -> { understood, said }
+    results: {}, // test mode: wordId -> was her FIRST tap correct?
   };
 
   appEl.hidden = true;
@@ -206,7 +222,7 @@ function renderStep(state) {
 }
 
 function renderListenStage(state) {
-  const { word, distractor } = state.steps[state.index];
+  const { word, distractors } = state.steps[state.index];
   const screen = el('div', { class: 'session-screen listen-stage' });
 
   const photoBtn = el('button', { type: 'button', class: 'session-photo-btn' });
@@ -232,7 +248,7 @@ function renderListenStage(state) {
     'aria-label': "Let's find it!",
   });
   onTap(findBtn, () => {
-    state.stage = distractor ? 'game' : 'prompt';
+    state.stage = distractors.length > 0 ? 'game' : 'prompt';
     renderStep(state);
   });
   screen.appendChild(findBtn);
@@ -261,13 +277,15 @@ function correctionCarrier(word, phrases, language) {
 }
 
 function renderGameStage(state) {
-  const { word, distractor } = state.steps[state.index];
+  const { word, distractors } = state.steps[state.index];
   const { phrases, language } = state;
   const screen = el('div', { class: 'session-screen game-stage' });
   screen.appendChild(el('div', { class: 'session-hint', text: `Find ${wordLabel(word)}` }));
 
-  const optionsWrap = el('div', { class: 'session-options' });
-  const options = shuffle([word, distractor]);
+  const options = shuffle([word, ...distractors]);
+  // 3 and 4 options get their own layout (smaller tiles / 2×2 grid).
+  const countClass = options.length >= 3 ? ` count-${Math.min(options.length, 4)}` : '';
+  const optionsWrap = el('div', { class: `session-options${countClass}` });
 
   // All game audio is keyed (one-sound rule, media.js): tapping something
   // that plays a DIFFERENT sound cuts the current one off mid-word; tapping
@@ -306,6 +324,11 @@ function renderGameStage(state) {
     btn.appendChild(wordVisual(opt, 'session-option-photo'));
     onTap(btn, () => {
       if (answered) return;
+      // Test mode scores the FIRST tap only; later taps (after a correction)
+      // never change the result.
+      if (state.results[word.id] === undefined) {
+        state.results[word.id] = opt.id === word.id;
+      }
       if (opt.id === word.id) {
         answered = true;
         playCorrectFeedback(); // cuts off a still-playing correction/prompt
@@ -314,7 +337,13 @@ function renderGameStage(state) {
         // falling through the stage change below instead of vanishing at 700ms.
         confettiBurstAt(sessionEl, btn);
         setTimeout(() => {
-          state.stage = 'prompt';
+          if (state.mode === 'test') {
+            // No real-world prompt card between test questions — straight on.
+            state.index += 1;
+            state.stage = 'game';
+          } else {
+            state.stage = 'prompt';
+          }
           renderStep(state);
         }, 700);
       } else {
@@ -425,6 +454,29 @@ function renderEndScreen(state) {
 
   const wordNames = state.steps.map((s) => wordLabel(s.word)).join(', ');
   screen.appendChild(el('div', { class: 'session-end-summary', text: `Today's words: ${wordNames}` }));
+
+  // Test results: the score plus a per-word ✓/✗ list of her FIRST taps. The
+  // observation toggles below are pre-set from these results (first-try
+  // correct → Understood), and the parent can still override before Done.
+  if (state.mode === 'test') {
+    const total = state.steps.length;
+    const right = state.steps.filter(({ word }) => state.results[word.id] === true).length;
+    screen.appendChild(
+      el('div', { class: 'test-score', text: `${right} / ${total} right on the first try` })
+    );
+    const resultList = el('div', { class: 'test-result-list' });
+    for (const { word } of state.steps) {
+      const ok = state.results[word.id] === true;
+      resultList.appendChild(
+        el('div', { class: 'test-result-row' }, [
+          el('span', { text: wordLabel(word) }),
+          el('span', { class: ok ? 'test-ok' : 'test-miss', text: ok ? '✓' : '✗' }),
+        ])
+      );
+    }
+    screen.appendChild(resultList);
+  }
+
   screen.appendChild(
     el('div', {
       class: 'session-end-reminder',
@@ -436,12 +488,23 @@ function renderEndScreen(state) {
 
   const list = el('div', { class: 'session-obs-list' });
   for (const { word } of state.steps) {
-    state.observations[word.id] = state.observations[word.id] || { understood: false, said: false };
+    if (!state.observations[word.id]) {
+      state.observations[word.id] = {
+        // Test mode: a first-try correct tap is evidence of understanding, so
+        // the toggle starts on (parent can still turn it off before Done).
+        understood: state.mode === 'test' && state.results[word.id] === true,
+        said: false,
+      };
+    }
     const obs = state.observations[word.id];
     const row = el('div', { class: 'session-obs-row' });
     row.appendChild(el('div', { class: 'session-obs-label', text: wordLabel(word) }));
 
-    const understoodBtn = el('button', { type: 'button', class: 'obs-btn', text: '👂 Understood' });
+    const understoodBtn = el('button', {
+      type: 'button',
+      class: `obs-btn${obs.understood ? ' active' : ''}`,
+      text: '👂 Understood',
+    });
     onTap(understoodBtn, () => {
       obs.understood = !obs.understood;
       understoodBtn.classList.toggle('active', obs.understood);

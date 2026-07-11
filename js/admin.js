@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=36';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=36';
-import { startSession, initSession } from './session.js?v=36';
-import { startChildMode } from './child.js?v=36';
-import { el } from './dom.js?v=36';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=36';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=37';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=37';
+import { startSession, initSession } from './session.js?v=37';
+import { startChildMode } from './child.js?v=37';
+import { el } from './dom.js?v=37';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=37';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -547,11 +547,39 @@ async function renderWords({ categoryId }) {
   });
   startBtn.disabled = !canStart;
   screen.appendChild(startBtn);
+
+  // Test mode (TEST_MODE_PLAN.md): no listen stage, straight to "vind de …"
+  // with 2–4 pictures. The difficulty choice persists in settings so it can
+  // be ratcheted up as she grows.
+  const settings = await getSettings();
+  let testOptionCount = Math.min(4, Math.max(2, settings.testOptionCount || 2));
+  const testBtn = el('button', {
+    class: 'btn-secondary',
+    text: '🎯 Start a test',
+    style: 'margin-bottom:10px;width:100%;',
+    onclick: () => startSession(categoryId, { mode: 'test', optionCount: testOptionCount }),
+  });
+  testBtn.disabled = !canStart;
+  buildSegmented(screen, {
+    label: 'Test difficulty (pictures to choose from)',
+    options: [
+      { label: '2', value: '2' },
+      { label: '3', value: '3' },
+      { label: '4', value: '4' },
+    ],
+    value: String(testOptionCount),
+    onChange: (v) => {
+      testOptionCount = Number(v);
+      saveSettings({ testOptionCount });
+    },
+  });
+  screen.appendChild(testBtn);
+
   if (!canStart) {
     screen.appendChild(
       el('p', {
         class: 'hint',
-        text: 'Needs at least 2 words with recorded audio before a session can start.',
+        text: 'Needs at least 2 words with recorded audio before a session or test can start.',
         style: 'margin:-4px 0 14px;',
       })
     );
@@ -2293,7 +2321,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=36');
+    const { startRecordingPage } = await import('./record.js?v=37');
     startRecordingPage(recordGistId);
     return;
   }

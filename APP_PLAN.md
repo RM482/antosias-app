@@ -1,6 +1,16 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 10 July 2026, end of session) — live app `?v=36`
+## Status (as of 11 July 2026) — live app `?v=37`
+
+**v37 — TEST MODE shipped** (see TEST_MODE_PLAN.md for the full spec): the
+category screen gains "🎯 Start a test" + a persistent 2/3/4-picture difficulty
+picker. Tests skip the listen stage — audio asks "vind de …" immediately with
+N options; wrong answers stay gentle (wiggle + correction + re-ask) but the
+FIRST tap is scored; no prompt cards between questions; the end screen shows
+"7/10 right on the first try" with per-word ✓/✗ and pre-toggles "Understood"
+on first-try-correct words (parent can override before Done). Practice mode,
+child mode, stickers, and SRS behavior unchanged. Also fixed earlier today:
+Polish audio confirmed working end-to-end (was a phone-side hiccup, not code).
 
 **Everything is code-complete, deployed, and locally verified. Nothing is
 half-built. The whole outstanding list is ON-PHONE TESTING (§ below).**
@@ -31,6 +41,15 @@ recipe (static server + headless Chromium with a fake mic, gotchas included).
 it picks up v36. (Home Screen icon only; never delete it, never clear Safari
 data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it now
 includes people and recordings.
+
+### 0. Test mode (v37) — newest, test first
+Open a category → set difficulty to 2 → "🎯 Start a test": audio asks
+immediately (no big photo first), correct tap → confetti → next question.
+Raise difficulty to 4: four pictures fit in a 2×2 grid; a wrong tap wiggles +
+corrects gently and re-asks. End screen: score matches what actually happened,
+"Understood" pre-ticked only on first-try-correct words, sticker still awarded,
+Done returns home. Practice "▶ Start a session" must be unchanged (big photo
+first, 2 pictures, prompt card between words).
 
 ### 1. Quick-record wizard (v33) — also the fast path for Polish audio
 Home screen → "🎙 Record missing audio (N words)" → step through: photo + word +

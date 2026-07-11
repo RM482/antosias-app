@@ -413,6 +413,7 @@ export async function getStorageStatus() {
 const DEFAULT_SETTINGS = {
   language: 'nl',      // reserved for future Polish support; only Dutch today
   lastBackupAt: null,  // epoch ms of the last "Save backup", or null if never
+  testOptionCount: 2,  // test-mode difficulty: options per question (2–4)
 };
 
 // Defaults win for any key the stored record is missing, so settings written
