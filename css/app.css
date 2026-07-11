@@ -442,8 +442,8 @@ p {
 }
 
 .session-photo {
-  width: min(70vw, 320px);
-  height: min(70vw, 320px);
+  width: min(78vw, 350px);
+  height: min(78vw, 350px);
   border-radius: 28px;
   background: #efe6d6;
   display: flex;
@@ -517,10 +517,21 @@ p {
   padding-top: 40px;
 }
 
+/* Never let flexbox SHRINK end-screen blocks to fit the viewport: a shrunken
+   .sticker-reveal paints its 64px sticker over the text below it. The screen
+   scrolls instead (it's an .allow-scroll area). */
+.end-stage > * {
+  flex-shrink: 0;
+}
+
+/* Two choices stack vertically so each picture can be BIG (parent feedback:
+   pictures were too small side-by-side). 3 and 4 choices switch to grids
+   below. */
 .session-options {
   display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
   justify-content: center;
 }
 
@@ -534,8 +545,8 @@ p {
 }
 
 .session-option-photo {
-  width: min(38vw, 200px);
-  height: min(38vw, 200px);
+  width: min(56vw, 250px);
+  height: min(56vw, 250px);
   border-radius: 24px;
   background: #efe6d6;
   display: flex;
@@ -555,22 +566,24 @@ p {
   outline: 5px solid #6fb366;
 }
 
-/* Test mode difficulty: 3 options shrink to fit one row on a phone;
-   4 options form a 2×2 grid. (2 options keep the practice layout.) */
-.session-options.count-3 .session-option-photo {
-  width: min(28vw, 150px);
-  height: min(28vw, 150px);
-}
-
+/* Test mode difficulty: 3 options = a 2+1 grid (third centered below);
+   4 options = a 2×2 grid. Tiles stay as big as the screen allows. */
+.session-options.count-3,
 .session-options.count-4 {
   display: grid;
   grid-template-columns: repeat(2, auto);
   justify-content: center;
 }
 
+.session-options.count-3 .session-option:nth-child(3) {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+
+.session-options.count-3 .session-option-photo,
 .session-options.count-4 .session-option-photo {
-  width: min(36vw, 170px);
-  height: min(36vw, 170px);
+  width: min(42vw, 190px);
+  height: min(42vw, 190px);
 }
 
 /* Test end screen: the first-tap score and per-word ✓/✗ list. */
@@ -1171,6 +1184,36 @@ p {
   font-weight: 600;
   font-size: 0.9rem;
   text-decoration: none;
+}
+
+/* --- Sticker book (full-screen collection view) --- */
+.sticker-book {
+  overflow-y: auto;
+  justify-content: flex-start;
+  padding-top: 48px;
+}
+
+.sticker-book > * {
+  flex-shrink: 0;
+}
+
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.sticker-cell {
+  aspect-ratio: 1;
+  background: var(--card-bg);
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.6rem;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.07);
 }
 
 /* --- Rewards: confetti + session stickers (v34) --- */

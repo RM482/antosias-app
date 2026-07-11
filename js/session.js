@@ -11,11 +11,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=37';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=37';
-import { el, shuffle, onTap } from './dom.js?v=37';
-import { mountParentGate } from './gate.js?v=37';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=37';
+} from './db.js?v=38';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=38';
+import { el, shuffle, onTap } from './dom.js?v=38';
+import { mountParentGate } from './gate.js?v=38';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=38';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -150,9 +150,9 @@ export async function startSession(categoryId, opts = {}) {
     return;
   }
 
-  // Practice (default): listen stage → 2-choice game → real-world prompt.
+  // Practice (default): listen stage → 2-choice game → next word.
   // Test: straight to the game with `optionCount` choices (2–4), first tap
-  // scored, no listen/prompt stages — see TEST_MODE_PLAN.md.
+  // scored, no listen stage — see TEST_MODE_PLAN.md.
   const mode = opts.mode === 'test' ? 'test' : 'practice';
   const optionCount = mode === 'test' ? Math.min(4, Math.max(2, opts.optionCount || 2)) : 2;
 
@@ -170,7 +170,7 @@ export async function startSession(categoryId, opts = {}) {
     steps,
     phrases, // this voice's carrier clips (meta store for the default voice)
     index: 0,
-    stage: mode === 'test' ? 'game' : 'listen', // 'listen' | 'game' | 'prompt'
+    stage: mode === 'test' ? 'game' : 'listen', // 'listen' | 'game'
     observations: {}, // wordId -> { understood, said }
     results: {}, // test mode: wordId -> was her FIRST tap correct?
   };
@@ -218,7 +218,6 @@ function renderStep(state) {
   }
   if (state.stage === 'listen') renderListenStage(state);
   else if (state.stage === 'game') renderGameStage(state);
-  else if (state.stage === 'prompt') renderPromptStage(state);
 }
 
 function renderListenStage(state) {
@@ -248,7 +247,13 @@ function renderListenStage(state) {
     'aria-label': "Let's find it!",
   });
   onTap(findBtn, () => {
-    state.stage = distractors.length > 0 ? 'game' : 'prompt';
+    if (distractors.length > 0) {
+      state.stage = 'game';
+    } else {
+      // No distractor available for this word — skip its game round.
+      state.index += 1;
+      state.stage = 'listen';
+    }
     renderStep(state);
   });
   screen.appendChild(findBtn);
@@ -337,13 +342,11 @@ function renderGameStage(state) {
         // falling through the stage change below instead of vanishing at 700ms.
         confettiBurstAt(sessionEl, btn);
         setTimeout(() => {
-          if (state.mode === 'test') {
-            // No real-world prompt card between test questions — straight on.
-            state.index += 1;
-            state.stage = 'game';
-          } else {
-            state.stage = 'prompt';
-          }
+          // Straight to the next word after a right answer — no interim
+          // screen (parent feedback, 11 July 2026). The real-world nudge
+          // lives on the end screen instead.
+          state.index += 1;
+          state.stage = state.mode === 'test' ? 'game' : 'listen';
           renderStep(state);
         }, 700);
       } else {
@@ -377,23 +380,43 @@ function renderGameStage(state) {
   sayPrompt();
 }
 
-function renderPromptStage(state) {
-  const { word } = state.steps[state.index];
-  const screen = el('div', { class: 'session-screen prompt-stage' });
-  screen.appendChild(el('div', { class: 'session-prompt-icon', text: '👪' }));
-  screen.appendChild(
-    el('div', {
-      class: 'session-prompt-text',
-      text: word.realWorldPrompt || `Try using "${wordLabel(word)}" together right now.`,
-    })
-  );
-  const continueBtn = el('button', { type: 'button', class: 'session-continue', text: 'Continue when done' });
-  onTap(continueBtn, () => {
-    state.index += 1;
-    state.stage = 'listen';
-    renderStep(state);
-  });
-  screen.appendChild(continueBtn);
+// Full-screen sticker book: every sticker she's collected, in a big grid she
+// can point at. Opens from the home screen's "⭐ Sticker book" button into the
+// #session overlay (so the toddler touch-proofing applies) and exits only via
+// the parent gate — safe to hand her the phone.
+export async function showStickerBook() {
+  let stickers = [];
+  try {
+    const rec = await get('meta', 'stickers');
+    stickers = (rec && Array.isArray(rec.value) && rec.value) || [];
+  } catch {
+    /* unreadable → shows the empty state */
+  }
+
+  appEl.hidden = true;
+  sessionEl.hidden = false;
+  sessionEl.innerHTML = '';
+  mountParentGate(exitSession);
+
+  const screen = el('div', { class: 'session-screen sticker-book allow-scroll' });
+  screen.appendChild(el('div', { class: 'session-end-title', text: '⭐ Antosia’s stickers' }));
+  if (stickers.length === 0) {
+    screen.appendChild(
+      el('div', { class: 'session-hint', text: 'No stickers yet — finish a session to earn the first one!' })
+    );
+  } else {
+    screen.appendChild(
+      el('div', {
+        class: 'session-hint',
+        text: `${stickers.length} sticker${stickers.length === 1 ? '' : 's'} collected`,
+      })
+    );
+    const grid = el('div', { class: 'sticker-grid' });
+    for (const s of stickers) {
+      grid.appendChild(el('div', { class: 'sticker-cell', text: s.emoji }));
+    }
+    screen.appendChild(grid);
+  }
   sessionEl.appendChild(screen);
 }
 

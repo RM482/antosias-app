@@ -1,6 +1,31 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 11 July 2026) — live app `?v=37`
+## Status (as of 11 July 2026, later) — live app `?v=38`
+
+**v38 — four fixes from the parent's real-use notes:**
+1. **Bigger pictures everywhere:** 2-choice game options now stack vertically at
+   min(56vw, 250px) each (~47% bigger); listen photo up to min(78vw, 350px);
+   test-mode 3 options form a 2+1 grid and 4 options a 2×2 grid, both at
+   min(42vw, 190px) tiles.
+2. **Interim real-world-prompt screen removed:** a correct answer goes straight
+   to the next word (practice → its listen stage; test → next question). The
+   prompt-stage code is deleted; `word.realWorldPrompt` stays on records/editor
+   but no longer appears mid-session — the end screen's reminder is the nudge.
+3. **⭐ Sticker book:** home-screen button (with count) right under ▶ Play opens
+   a full-screen grid of every collected sticker inside the #session overlay —
+   toddler-proofed, exit only via the parent gate (`showStickerBook` in
+   session.js).
+4. **End-screen overlap fixed:** flexbox was SHRINKING `.sticker-reveal`
+   (min-height 40px) when content exceeded the viewport, painting the 64px
+   sticker over "Today's words". `.end-stage > * { flex-shrink: 0 }` — the
+   screen scrolls instead. Verified by bounding-box measurement on a full
+   5-word end screen.
+
+All verified headlessly (screenshots + measured layouts, zero console errors).
+On-phone: re-run checklist items 0 (test mode) and 4 (rewards) below — plus the
+sticker book button and the missing prompt screen are the visible changes.
+
+## Previous status (11 July 2026) — shipped as v37
 
 **v37 — TEST MODE shipped** (see TEST_MODE_PLAN.md for the full spec): the
 category screen gains "🎯 Start a test" + a persistent 2/3/4-picture difficulty

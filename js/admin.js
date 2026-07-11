@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=37';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=37';
-import { startSession, initSession } from './session.js?v=37';
-import { startChildMode } from './child.js?v=37';
-import { el } from './dom.js?v=37';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=37';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=38';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=38';
+import { startSession, initSession, showStickerBook } from './session.js?v=38';
+import { startChildMode } from './child.js?v=38';
+import { el } from './dom.js?v=38';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=38';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -204,12 +204,14 @@ async function switchLanguage(lang) {
 }
 
 async function renderCategories() {
-  const [allCategories, allWords, settings] = await Promise.all([
+  const [allCategories, allWords, settings, stickersRec] = await Promise.all([
     getAll('categories'),
     getAll('words'),
     getSettings(),
+    get('meta', 'stickers').catch(() => null),
   ]);
   const lang = settings.language || 'nl';
+  const stickerCount = (stickersRec && Array.isArray(stickersRec.value) && stickersRec.value.length) || 0;
   // Only show the active language's content (old records without a language
   // field read as Dutch, so nothing pre-existing disappears).
   const categories = allCategories
@@ -235,6 +237,17 @@ async function renderCategories() {
       class: 'play-btn',
       text: '▶ Play',
       onclick: () => startChildMode(returnHome),
+    })
+  );
+
+  // Her collection, one tap away (parent taps it and hands the phone over —
+  // it opens full-screen with the hold-to-exit gate, like a session).
+  screen.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: `⭐ Sticker book${stickerCount ? ` (${stickerCount})` : ''}`,
+      style: 'width:100%;margin-bottom:16px;',
+      onclick: () => showStickerBook(),
     })
   );
 
@@ -2321,7 +2334,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=37');
+    const { startRecordingPage } = await import('./record.js?v=38');
     startRecordingPage(recordGistId);
     return;
   }
