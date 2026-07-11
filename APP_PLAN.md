@@ -1,116 +1,94 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 11 July 2026, later) — live app `?v=38`
+## Status (as of 11 July 2026, end of session) — live app `?v=38`
 
-**v38 — four fixes from the parent's real-use notes:**
-1. **Bigger pictures everywhere:** 2-choice game options now stack vertically at
-   min(56vw, 250px) each (~47% bigger); listen photo up to min(78vw, 350px);
-   test-mode 3 options form a 2+1 grid and 4 options a 2×2 grid, both at
-   min(42vw, 190px) tiles.
-2. **Interim real-world-prompt screen removed:** a correct answer goes straight
-   to the next word (practice → its listen stage; test → next question). The
-   prompt-stage code is deleted; `word.realWorldPrompt` stays on records/editor
-   but no longer appears mid-session — the end screen's reminder is the nudge.
-3. **⭐ Sticker book:** home-screen button (with count) right under ▶ Play opens
-   a full-screen grid of every collected sticker inside the #session overlay —
-   toddler-proofed, exit only via the parent gate (`showStickerBook` in
-   session.js).
-4. **End-screen overlap fixed:** flexbox was SHRINKING `.sticker-reveal`
-   (min-height 40px) when content exceeded the viewport, painting the 64px
-   sticker over "Today's words". `.end-stage > * { flex-shrink: 0 }` — the
-   screen scrolls instead. Verified by bounding-box measurement on a full
-   5-word end screen.
+**Everything is code-complete, deployed, and locally verified (headless
+Chromium, measured screenshots, zero console errors). Nothing is half-built.
+The whole outstanding list is ON-PHONE TESTING (§ below) — it has grown, so
+next session should start there.**
 
-All verified headlessly (screenshots + measured layouts, zero console errors).
-On-phone: re-run checklist items 0 (test mode) and 4 (rewards) below — plus the
-sticker book button and the missing prompt screen are the visible changes.
-
-## Previous status (11 July 2026) — shipped as v37
-
-**v37 — TEST MODE shipped** (see TEST_MODE_PLAN.md for the full spec): the
-category screen gains "🎯 Start a test" + a persistent 2/3/4-picture difficulty
-picker. Tests skip the listen stage — audio asks "vind de …" immediately with
-N options; wrong answers stay gentle (wiggle + correction + re-ask) but the
-FIRST tap is scored; no prompt cards between questions; the end screen shows
-"7/10 right on the first try" with per-word ✓/✗ and pre-toggles "Understood"
-on first-try-correct words (parent can override before Done). Practice mode,
-child mode, stickers, and SRS behavior unchanged. Also fixed earlier today:
-Polish audio confirmed working end-to-end (was a phone-side hiccup, not code).
-
-**Everything is code-complete, deployed, and locally verified. Nothing is
-half-built. The whole outstanding list is ON-PHONE TESTING (§ below).**
-
-Four features shipped this session (v33–v36), each verified end-to-end in
-headless Chromium (fake mic, real clicks, zero console errors) and pushed to
-`main` (= deployed to GitHub Pages):
+Shipped across 11 July, newest first:
 
 | v | What |
 |---|---|
-| v33 | Quick-record wizard + Dutch article/een controls in the Polish editor |
-| v34 | Reward system: confetti on correct taps, collectible session stickers |
-| v35 | Multiple photos per word, rotated per appearance |
+| v38 | Real-use fixes: pictures ~50% bigger (2 choices now stack vertically; 3 = 2+1 grid, 4 = 2×2), interim real-world-prompt screen REMOVED (correct tap → next word, both modes), ⭐ Sticker book screen (home button, parent-gate exit), end-screen sticker/text overlap fixed |
+| v37 | TEST MODE (see TEST_MODE_PLAN.md): "🎯 Start a test" per category + persistent 2/3/4 difficulty picker; skips the listen stage — audio asks immediately; first tap scored; end screen shows "7/10 right on the first try" + ✓/✗ per word, pre-toggles "Understood" on first-try-correct |
 | v36 | Child-mode flow reorder: host intro before the category tiles |
+| v35 | Multiple photos per word, rotated per appearance |
+| v34 | Rewards: confetti on correct taps, collectible session stickers |
+| v33 | Quick-record wizard + Dutch article/een controls in the Polish editor |
 
-**⏭️ NEXT SESSION — do this first: the on-phone testing checklist below.** After
-that, the only queued idea is *reward polish if real use asks for it* (e.g. a
-sticker-book screen in child mode). No other work is pending.
-
-**Local verification is now easy:** `.claude/skills/verify/SKILL.md` has the
-recipe (static server + headless Chromium with a fake mic, gotchas included).
+Notes for the next session:
+- ✅ Confirmed on the phone this session: **Polish audio works** (record + play —
+  the earlier report was a phone-side hiccup, not code) and the Dutch category
+  names. Everything else below is still untested on the real iPhone.
+- `word.realWorldPrompt` still exists on records and in the editor but no longer
+  appears mid-session (v38 cut that screen); the end-screen reminder is the
+  only real-world nudge now.
+- No feature work is queued. Next candidates come from on-phone testing
+  feedback. **Local verification recipe:** `.claude/skills/verify/SKILL.md`
+  (static server + headless Chromium; on this Mac stub `getUserMedia` with an
+  oscillator MediaStreamDestination — the fake-device flag doesn't work; see
+  the 11 July scratchpad scripts pattern described there).
 
 ---
 
-## ON-PHONE TESTING CHECKLIST (nothing here has been tested on the real iPhone)
+## ON-PHONE TESTING CHECKLIST for next time
 
 **Before anything: force-quit the app on the phone and reopen it** — that's how
-it picks up v36. (Home Screen icon only; never delete it, never clear Safari
-data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it now
-includes people and recordings.
+it picks up v38. (Home Screen icon only; never delete it, never clear Safari
+data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it includes
+people and recordings now.
 
-### 0. Test mode (v37) — newest, test first
-Open a category → set difficulty to 2 → "🎯 Start a test": audio asks
-immediately (no big photo first), correct tap → confetti → next question.
-Raise difficulty to 4: four pictures fit in a 2×2 grid; a wrong tap wiggles +
-corrects gently and re-asks. End screen: score matches what actually happened,
-"Understood" pre-ticked only on first-try-correct words, sticker still awarded,
-Done returns home. Practice "▶ Start a session" must be unchanged (big photo
-first, 2 pictures, prompt card between words).
+### 0. v38 look & flow — quickest tour, do this first
+Run one practice session: the two choices are BIG and stacked vertically; a
+correct tap goes **straight to the next word** (no "give Papa the banana"
+screen anymore); the end screen's sticker no longer overlaps "Today's words".
+Then tap **⭐ Sticker book** on the home screen: her collection shows as a big
+grid, and the only way out is the hold-the-dot parent gate.
 
-### 1. Quick-record wizard (v33) — also the fast path for Polish audio
-Home screen → "🎙 Record missing audio (N words)" → step through: photo + word +
-Record → Next. Recordings save instantly; Back mid-way loses nothing. The home
-count should drop as words get audio. Do this on the 🇵🇱 flag with Mama to fill
-in Polish audio (Stage 5's remaining *content* work).
+### 1. Test mode (v37)
+Open a category → "🎯 Start a test" with difficulty 2: audio asks immediately
+(no big photo first), correct tap → confetti → next question. Raise difficulty
+to 4: four pictures in a 2×2 grid; a wrong tap wiggles + corrects gently and
+re-asks. End screen: score matches what actually happened, "Understood"
+pre-ticked only on first-try-correct words, sticker still awarded, Done saves
+and returns home.
 
-### 2. Dutch article fix from the Polish editor (v33)
+### 2. Quick-record wizard (v33) — finish the Polish content
+Confirmed working this session. Remaining: step through the rest of the 🇵🇱
+words with Mama ("🎙 Record missing audio (N words)" on the Polish flag) until
+the count reaches zero — that completes Stage 5's outstanding content work.
+
+### 3. Dutch article fix from the Polish editor (v33)
 🇵🇱 → open a Polish word → "Also in Dutch" section now has the de/het picker,
 the "een" toggle, and a live "de banaan" preview. **Note:** Dutch twins created
 from the Polish side *before* v33 were saved with no article — open those once
 and set de/het.
 
-### 3. Multiple photos per word (v35)
+### 4. Multiple photos per word (v35)
 Open a word → "More photos of the same thing (optional)" → ＋ Add photo (2–3
 different paintings / cups / balls) → Save → reopen (they persist) → run a
 session and confirm the picture changes between appearances. Tap a thumbnail to
 remove one.
 
-### 4. Rewards (v34)
+### 5. Rewards (v34)
 Run a full session: confetti on each correct tap; the end screen shows a new
 sticker + the growing shelf. A second session gives a different sticker. Exiting
 early via the parent gate earns nothing (by design).
 
-### 5. Child-mode flow (v36) — needs a default person first
+### 6. Child-mode flow (v36) — needs a default person first
 Settings → 👪 People & voices → add yourself: name, photo, 4s intro clip
 ("Nederlands!"), **Default voice = Yes**. Then ▶ Play → flag → **your photo +
 "Nederlands!" appears BEFORE the category tiles** → tiles → session. The intro
 must not repeat after picking a category.
 
-### 6. Family voices — Phase B (never tested on the phone)
+### 7. Family voices — Phase B (never tested on the phone)
 Add a non-default person → "🎙 Record words in X's voice" → record 2–3 words
 (silly accent is fine) → ▶ Play → face pick appears → session plays in that
 voice. Then take a fresh backup (it now carries recordings).
 
-### 7. Remote recording — Phase C (never tested on the phone)
+### 8. Remote recording — Phase C (never tested on the phone)
 Build a request on the phone → AirDrop the file to the Mac →
 `~/.local/bin/gh gist create <file>` → open
 `https://rm482.github.io/antosias-app/?record=<gistId>` in a FRESH browser
@@ -122,7 +100,7 @@ same file again → no duplicates**. **Test once from an Android device BEFORE
 asking the whole family** (codec risk — the import's decode-check reports
 unplayable clips by name).
 
-### 8. Force-quit + reopen with real data intact
+### 9. Force-quit + reopen with real data intact
 The perennial check: after all of the above, force-quit and reopen — photos,
 audio, stickers, people all still there.
 
@@ -131,7 +109,7 @@ Speelgoed.
 
 ---
 
-## Shipped this session — details
+## Shipped earlier (v33–v36) — details — v37 spec: TEST_MODE_PLAN.md; v38: commit 1b4fba6
 
 **v36 — child-mode flow reorder (parent request):**
 New order: flag → **host intro** (default person's photo + "Nederlands!"/
