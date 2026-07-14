@@ -1,16 +1,18 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 11 July 2026, end of session) — live app `?v=38`
+## Status (as of 14 July 2026, end of session) — live app `?v=40`
 
 **Everything is code-complete, deployed, and locally verified (headless
 Chromium, measured screenshots, zero console errors). Nothing is half-built.
 The whole outstanding list is ON-PHONE TESTING (§ below) — it has grown, so
 next session should start there.**
 
-Shipped across 11 July, newest first:
+Shipped newest first:
 
 | v | What |
 |---|---|
+| v40 | Six real-use fixes: session word order shuffled (no longer always the same first word); choice photos show whole (object-fit: contain, uncropped); parent hold-to-exit 3s→1.5s; ⭐ Stickers manager in Settings (remove one / reset all); Dutch↔Polish category pairs mirror (add/delete/emoji-change propagate; delete removes the twin + its words; names stay per-language); "➕ Add missing translations" wizard on the flag (type the twin word + de/het, reuses the photo, then surfaces in that language's "Record missing audio") |
+| v39 | iOS mic fix: a muted/interrupted capture stream (notification, Siri, call) is dropped and re-acquired instead of reused — stops silent-empty recordings after an interruption |
 | v38 | Real-use fixes: pictures ~50% bigger (2 choices now stack vertically; 3 = 2+1 grid, 4 = 2×2), interim real-world-prompt screen REMOVED (correct tap → next word, both modes), ⭐ Sticker book screen (home button, parent-gate exit), end-screen sticker/text overlap fixed |
 | v37 | TEST MODE (see TEST_MODE_PLAN.md): "🎯 Start a test" per category + persistent 2/3/4 difficulty picker; skips the listen stage — audio asks immediately; first tap scored; end screen shows "7/10 right on the first try" + ✓/✗ per word, pre-toggles "Understood" on first-try-correct |
 | v36 | Child-mode flow reorder: host intro before the category tiles |
@@ -25,22 +27,51 @@ Notes for the next session:
 - `word.realWorldPrompt` still exists on records and in the editor but no longer
   appears mid-session (v38 cut that screen); the end-screen reminder is the
   only real-world nudge now.
+- v40 was driven from a round of the parent's own on-phone notes. Verified
+  locally (headless Chromium, zero console errors): category add + emoji-sync +
+  two-way linking, sticker remove + reset, and the translation wizard creating
+  a photo-linked twin in the paired category. NOT reproducible locally (the
+  seed has no recorded audio, so no session starts): the shuffled word order
+  and whole-photo look in a real session, the 1.5s hold feel, and the Dutch
+  de/het picker when adding a Dutch translation from the Polish flag — check
+  those on-phone (§0a below).
 - No feature work is queued. Next candidates come from on-phone testing
   feedback. **Local verification recipe:** `.claude/skills/verify/SKILL.md`
   (static server + headless Chromium; on this Mac stub `getUserMedia` with an
   oscillator MediaStreamDestination — the fake-device flag doesn't work; see
-  the 11 July scratchpad scripts pattern described there).
+  the 11 July scratchpad scripts pattern described there). For DB-shaped
+  checks (categories, stickers, twins) you can also drive the app in the
+  Browser pane and read/patch IndexedDB directly with `javascript_tool` — how
+  v40 was verified without any recorded audio.
 
 ---
 
 ## ON-PHONE TESTING CHECKLIST for next time
 
 **Before anything: force-quit the app on the phone and reopen it** — that's how
-it picks up v38. (Home Screen icon only; never delete it, never clear Safari
+it picks up v40. (Home Screen icon only; never delete it, never clear Safari
 data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it includes
 people and recordings now.
 
-### 0. v38 look & flow — quickest tour, do this first
+### 0a. v40 fixes — quickest tour, do this first
+- **Add translations:** on the 🇳🇱 flag, look under "Record missing audio" for
+  **"➕ Add missing Polish translations (N)"** (only appears for words that have
+  a picture but no twin yet). Add a couple (type the word; de/het picker shows
+  when the target is Dutch), then switch to 🇵🇱 — those words now exist and show
+  up in **"Record missing audio"** for Polish.
+- **Category mirroring:** add a category on 🇳🇱 → switch to 🇵🇱 → it's there with
+  the same emoji. Change a Dutch emoji → the Polish twin follows. ⚠️ Deleting a
+  category now also deletes its paired other-language category **and its words**
+  — the confirm dialog spells that out.
+- **Stickers manager:** Settings → **⭐ Stickers** → tap one to remove it, or
+  "Reset all". (It's in Settings so Antosia can't wipe her own collection.)
+- **Session feel:** run a session — the word order varies (no longer always the
+  same first word), the pictures show whole/uncropped, and the hold-to-exit dot
+  is quicker (~1.5s).
+- **Mic (v39):** during a recording, trigger a notification/Siri, then finish —
+  the take should still have sound, not silence.
+
+### 0. v38 look & flow
 Run one practice session: the two choices are BIG and stacked vertically; a
 correct tap goes **straight to the next word** (no "give Papa the banana"
 screen anymore); the end screen's sticker no longer overlaps "Today's words".
@@ -109,7 +140,7 @@ Speelgoed.
 
 ---
 
-## Shipped earlier (v33–v36) — details — v37 spec: TEST_MODE_PLAN.md; v38: commit 1b4fba6
+## Shipped earlier (v33–v36) — details — v37 spec: TEST_MODE_PLAN.md; v38: commit 1b4fba6; v39: commit 2a247f4; v40: commit 97cb5f9
 
 **v36 — child-mode flow reorder (parent request):**
 New order: flag → **host intro** (default person's photo + "Nederlands!"/
