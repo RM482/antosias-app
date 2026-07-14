@@ -1,9 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=41';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=41';
-import { startSession, initSession, showStickerBook } from './session.js?v=41';
-import { startChildMode } from './child.js?v=41';
-import { el } from './dom.js?v=41';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=41';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=42';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=42';
+import { startSession, initSession, showStickerBook } from './session.js?v=42';
+import { startChildMode } from './child.js?v=42';
+import { el } from './dom.js?v=42';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=42';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=42';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -1489,6 +1490,37 @@ async function renderSettings() {
   }
   screen.appendChild(card('⭐ Stickers', stickerChildren));
 
+  // --- Translation linking: Release 1 preparation (TWIN_LINK_PLAN.md §6) ---
+  // Read-only audit + parent decisions. Writes NO word records and changes no
+  // schema — it only records what the later migration should do.
+  const auditRec = await get('meta', 'twinAudit').catch(() => null);
+  const audit = auditRec && auditRec.value;
+  const linkChildren = [
+    el('p', {
+      class: 'settings-note',
+      text: 'Right now a Dutch word and its Polish word are only linked if they share the same picture — so a word without a photo can’t be translated at all. This prepares the fix: it works out which words belong together, and asks you about anything it can’t be sure of.',
+    }),
+  ];
+  if (audit && audit.ready) {
+    linkChildren.push(
+      el('p', {
+        class: 'settings-line',
+        text: `Prepared on ${formatBackupDate(audit.createdAt)} — ${
+          (audit.cohortPairs || []).length + (audit.manualPairs || []).length
+        } pair(s) confirmed.`,
+      })
+    );
+  }
+  linkChildren.push(
+    el('button', {
+      class: 'btn-secondary',
+      text: audit && audit.ready ? '🔗 Review translation linking' : '🔗 Prepare translation linking',
+      style: 'width:100%;',
+      onclick: () => push({ screen: 'twinAudit', openedAt: Date.now() }),
+    })
+  );
+  screen.appendChild(card('🔗 Translation linking', linkChildren));
+
   // --- Backup reminder ---
   const last = settings.lastBackupAt;
   const daysSince = last ? Math.floor((Date.now() - last) / 86400000) : null;
@@ -2216,6 +2248,253 @@ async function renderQuickRecord(view) {
 // the paired category, and share the source word's photo so the twins link.
 // Audio is intentionally left empty — it then shows up in "Record missing
 // audio" for that language, exactly the follow-up the parent wanted.
+// --- Translation linking, Release 1: the audit (TWIN_LINK_PLAN.md §6) --------
+//
+// Non-destructive by design: this screen writes NO word records and does not
+// touch the schema. It computes what the migration WOULD do, gets the parent's
+// decision on anything that isn't backed by evidence, and stores those decisions
+// (by word id, with a dataset signature) for the migration to revalidate later.
+async function renderTwinAudit(view) {
+  const [allWords, settings] = await Promise.all([getAll('words'), getSettings()]);
+  await attachPhotos(allWords);
+  const plan = buildAuditPlan(allWords);
+  const byId = new Map(allWords.map((w) => [w.id, w]));
+
+  // Decisions live on the view so a re-render doesn't lose them.
+  if (!view.decisions) {
+    view.decisions = { cohortConfirmed: false, manualPairs: {} }; // photoId -> {nlId, plId}
+  }
+  const decisions = view.decisions;
+
+  // The backup must be taken FROM THIS FLOW: a backup from last week doesn't
+  // protect the data as it stands right now.
+  const backupFresh = (settings.lastBackupAt ?? 0) >= view.openedAt;
+
+  appEl.appendChild(topbar({ title: '🔗 Translation linking', onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: 'Nothing is changed on this screen. It only works out which Dutch and Polish words belong together, and saves your answers. The actual change comes in a later update.',
+    })
+  );
+
+  // --- Step 1: fresh backup -------------------------------------------------
+  const backupChildren = [];
+  if (backupFresh) {
+    backupChildren.push(el('p', { class: 'settings-line', text: '✅ Fresh backup saved.' }));
+  } else {
+    backupChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: 'Save a backup now, before anything else. Your recordings and photos exist only on this phone.',
+      })
+    );
+    backupChildren.push(
+      el('button', {
+        class: 'btn-secondary',
+        text: '💾 Save backup',
+        style: 'width:100%;',
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          btn.textContent = 'Preparing backup…';
+          try {
+            const { method, sizeMB } = await exportAndShare({});
+            if (method === 'cancelled') return; // nothing left the phone
+            await saveSettings({ lastBackupAt: Date.now() });
+            if (method === 'download') {
+              alert(
+                `Backup saved (~${sizeMB} MB). Keep it somewhere safe — Files, iCloud Drive, or AirDrop it to your computer.`
+              );
+            }
+            render();
+          } catch (err) {
+            alert(`Backup failed: ${errText(err)}`);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = '💾 Save backup';
+          }
+        },
+      })
+    );
+  }
+  screen.appendChild(card('1. Backup first', backupChildren));
+
+  // --- Step 2: what we can work out on our own ------------------------------
+  const autoChildren = [
+    el('p', {
+      class: 'settings-line',
+      text: `${plan.photoPairs.length} pair(s) already share a picture — these link automatically.`,
+    }),
+    el('p', {
+      class: 'settings-line',
+      text: `${plan.untranslated.length} word(s) have no partner yet — they stay as they are, ready to be translated.`,
+    }),
+  ];
+  if (plan.missingLanguage > 0) {
+    autoChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: `${plan.missingLanguage} older word(s) don’t record which language they are. The update will mark them as Dutch.`,
+      })
+    );
+  }
+  screen.appendChild(card('2. Worked out automatically', autoChildren));
+
+  // --- Step 3: the starter set (one batch confirmation, never silent) --------
+  const cohortChildren = [];
+  if (plan.cohort.intact && plan.cohort.pairs.length > 0) {
+    cohortChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: 'Your starter words look untouched, so we can match them up from the original list. Check they look right, then tick the box.',
+      })
+    );
+    const list = el('div', { class: 'twin-pair-list' });
+    for (const p of plan.cohort.pairs) {
+      list.appendChild(
+        el('div', { class: 'twin-pair-row' }, [
+          el('span', { text: wordLabel(p.nl) }),
+          el('span', { class: 'twin-pair-link', text: '↔' }),
+          el('span', { text: wordLabel(p.pl) }),
+        ])
+      );
+    }
+    cohortChildren.push(list);
+    const checkbox = el('input', { type: 'checkbox' });
+    checkbox.checked = decisions.cohortConfirmed;
+    checkbox.addEventListener('change', (e) => {
+      decisions.cohortConfirmed = e.target.checked;
+    });
+    const label = el('label', { class: 'twin-confirm' }, [
+      checkbox,
+      el('span', { text: `Yes — link these ${plan.cohort.pairs.length} starter pairs` }),
+    ]);
+    cohortChildren.push(label);
+  } else {
+    cohortChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: 'Your starter words have been edited since they were added, so we won’t guess at them. You can link any of them yourself later, one at a time.',
+      })
+    );
+  }
+  screen.appendChild(card('3. The starter words', cohortChildren));
+
+  // --- Step 4: ambiguous groups (parent decides; leave-separate is default) --
+  if (plan.ambiguous.length > 0) {
+    const ambChildren = [
+      el('p', {
+        class: 'settings-note',
+        text: 'These words share one picture, so we can’t tell which belongs with which. Pick a pair only if you’re sure — otherwise leave them separate.',
+      }),
+    ];
+    for (const group of plan.ambiguous) {
+      const box = el('div', { class: 'twin-ambiguous' });
+      const thumb = el('div', { class: 'thumb' });
+      const withPhoto = group.words.find((w) => w.photo);
+      if (withPhoto) {
+        const img = el('img', { alt: '' });
+        img.src = URL.createObjectURL(withPhoto.photo);
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = '🖼';
+      }
+      box.appendChild(thumb);
+      box.appendChild(
+        el('div', {
+          class: 'settings-note',
+          text: `Shared by: ${group.words.map((w) => wordLabel(w)).join(', ')}`,
+        })
+      );
+
+      const chosen = decisions.manualPairs[group.photoId] || {};
+      const makeSelect = (candidates, side, placeholder) => {
+        const sel = el('select', { class: 'twin-select' });
+        sel.appendChild(el('option', { value: '', text: placeholder }));
+        for (const w of candidates) {
+          const opt = el('option', { value: w.id, text: wordLabel(w) });
+          if (chosen[side] === w.id) opt.selected = true;
+          sel.appendChild(opt);
+        }
+        sel.addEventListener('change', (e) => {
+          const current = decisions.manualPairs[group.photoId] || {};
+          const next = { ...current, [side]: e.target.value || undefined };
+          if (!next.nlId && !next.plId) delete decisions.manualPairs[group.photoId];
+          else decisions.manualPairs[group.photoId] = next;
+        });
+        return sel;
+      };
+      box.appendChild(makeSelect(group.nl, 'nlId', '(leave separate)'));
+      box.appendChild(makeSelect(group.pl, 'plId', '(leave separate)'));
+      ambChildren.push(box);
+    }
+    screen.appendChild(card(`4. Needs your decision (${plan.ambiguous.length})`, ambChildren));
+  }
+
+  // --- Step 5: save the decisions -------------------------------------------
+  const saveChildren = [];
+  if (!backupFresh) {
+    saveChildren.push(
+      el('p', { class: 'settings-note settings-note-warn', text: 'Save a backup above first.' })
+    );
+  }
+  const saveBtn = el('button', {
+    text: 'Save my answers',
+    style: 'width:100%;',
+    onclick: async () => {
+      // Only keep a manual pair when BOTH sides were picked and it is legal.
+      const manualPairs = [];
+      for (const [photoId, choice] of Object.entries(decisions.manualPairs)) {
+        if (!choice.nlId || !choice.plId) continue; // half-picked = leave separate
+        const nlWord = byId.get(choice.nlId);
+        const plWord = byId.get(choice.plId);
+        const problem = validateManualPair(nlWord, plWord);
+        if (problem) {
+          alert(`That pairing isn’t valid: ${problem}`);
+          return;
+        }
+        manualPairs.push([nlWord.id, plWord.id]);
+      }
+      const cohortPairs =
+        decisions.cohortConfirmed && plan.cohort.intact
+          ? plan.cohort.pairs.map((p) => [p.nl.id, p.pl.id])
+          : [];
+      try {
+        await put('meta', {
+          key: 'twinAudit',
+          value: {
+            auditVersion: 1,
+            createdAt: Date.now(),
+            backupAt: (await getSettings()).lastBackupAt ?? null,
+            // The migration must refuse to act on these decisions if the data
+            // changed after they were made.
+            signature: plan.signature,
+            cohortConfirmed: decisions.cohortConfirmed && plan.cohort.intact,
+            cohortPairs,
+            manualPairs,
+            ready: true,
+          },
+        });
+      } catch (err) {
+        alert(`Could not save your answers: ${errText(err)}`);
+        return;
+      }
+      alert(
+        `Saved. ${cohortPairs.length + manualPairs.length} pair(s) confirmed. The update that actually links them will come next — your words are unchanged for now.`
+      );
+      pop();
+    },
+  });
+  saveBtn.disabled = !backupFresh;
+  saveChildren.push(saveBtn);
+  screen.appendChild(card('5. Save', saveChildren));
+
+  appEl.appendChild(screen);
+}
+
 // A word can legitimately carry no categoryId (damaged or leftover records —
 // see backup.js's isUsableWord), and IndexedDB throws DataError on a null key.
 // Never hand `get` an empty id.
@@ -2820,6 +3099,7 @@ async function render() {
   if (view.screen === 'personEdit') return renderPersonEdit(view);
   if (view.screen === 'quickRecord') return renderQuickRecord(view);
   if (view.screen === 'addTranslations') return renderAddTranslations(view);
+  if (view.screen === 'twinAudit') return renderTwinAudit(view);
   if (view.screen === 'personRecord') return renderPersonRecord(view);
   if (view.screen === 'personRecordWords') return renderPersonRecordWords(view);
   if (view.screen === 'personRecordPhrases') return renderPersonRecordPhrases(view);
@@ -2852,7 +3132,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=41');
+    const { startRecordingPage } = await import('./record.js?v=42');
     startRecordingPage(recordGistId);
     return;
   }

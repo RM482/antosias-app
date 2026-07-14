@@ -1,4 +1,4 @@
-import { el } from './dom.js?v=41';
+import { el } from './dom.js?v=42';
 
 const sessionEl = document.getElementById('session');
 

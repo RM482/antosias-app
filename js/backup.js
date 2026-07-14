@@ -1,5 +1,5 @@
-import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=41';
-import { canDecodeAudio } from './media.js?v=41';
+import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=42';
+import { canDecodeAudio } from './media.js?v=42';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
