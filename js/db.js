@@ -100,7 +100,7 @@ export async function remove(storeName, id) {
 // commits or none do. Used by backup restore so a failure partway through
 // (bad file, out of storage) can never leave a half-imported database.
 // `writes` looks like: { categories: [...], words: [...] }
-export async function putAllTransactional(writes) {
+export async function putAllTransactional(writes, context = 'restoring data') {
   const db = await openDB();
   const storeNames = Object.keys(writes);
   const t = db.transaction(storeNames, 'readwrite');
@@ -110,8 +110,8 @@ export async function putAllTransactional(writes) {
   }
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve();
-    t.onerror = () => reject(storageError(t.error, 'restoring data'));
-    t.onabort = () => reject(storageError(t.error, 'restoring data (transaction aborted, possibly out of storage space)'));
+    t.onerror = () => reject(storageError(t.error, context));
+    t.onabort = () => reject(storageError(t.error, `${context} (transaction aborted, possibly out of storage space)`));
   });
 }
 

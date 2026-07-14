@@ -472,6 +472,27 @@ p {
   color: var(--muted);
 }
 
+/* Shown only when saving her progress failed (storage full / DB unavailable):
+   a plain-language message plus a way out that doesn't fake success. */
+.session-save-error {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(180, 60, 40, 0.08);
+  max-width: 420px;
+}
+
+.session-secondary {
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: #fff;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
 .session-continue {
   font-size: 1.15rem;
   padding: 16px 32px;
@@ -744,7 +765,9 @@ p {
 }
 
 .parent-gate-fill.filling {
-  transition: transform 3s linear;
+  /* Duration is set from HOLD_MS in gate.js so the two can't drift apart;
+     this value is only a fallback. */
+  transition: transform 1.5s linear;
   transform: scaleX(1);
 }
 
@@ -1217,6 +1240,26 @@ p {
   justify-content: center;
   font-size: 2.6rem;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.07);
+}
+
+/* Translation conflict: the two candidate words side by side, so the parent can
+   see at a glance whether they're the same concept. */
+.conflict-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.conflict-side {
+  text-align: center;
+  padding: 10px 8px;
+  border-radius: 16px;
+  background: var(--card-bg);
+}
+
+.conflict-side .thumb.large {
+  margin: 0 auto 8px;
 }
 
 /* Settings → Manage stickers: smaller, tappable chips (a × hint on hover). */

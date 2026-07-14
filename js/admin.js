@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=40';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=40';
-import { startSession, initSession, showStickerBook } from './session.js?v=40';
-import { startChildMode } from './child.js?v=40';
-import { el } from './dom.js?v=40';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=40';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=41';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=41';
+import { startSession, initSession, showStickerBook } from './session.js?v=41';
+import { startChildMode } from './child.js?v=41';
+import { el } from './dom.js?v=41';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=41';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -557,14 +557,25 @@ async function renderCategoryEdit({ categoryId }) {
         onclick: async () => {
           const [words, allCats] = await Promise.all([getAll('words'), getAll('categories')]);
           const otherLang = (existing.language ?? 'nl') === 'nl' ? 'pl' : 'nl';
-          // Mirror the delete to the paired category. Look it up WITHOUT
-          // creating one (findTwinCategory, not findOrCreate).
-          const twin = findTwinCategory(existing, allCats, otherLang);
+          const otherLabel = otherLang === 'nl' ? 'Dutch' : 'Polish';
+          // Cascade ONLY on a strong link. A same-name category is not proof of
+          // a twin, and this path deletes words — so an unverified match is left
+          // alone and the parent is told, rather than guessed at.
+          const twin = findLinkedTwinCategory(existing, allCats, otherLang);
           const here = words.filter((w) => w.categoryId === categoryId);
           const there = twin ? words.filter((w) => w.categoryId === twin.id) : [];
-          const twinNote = twin
-            ? ` Its paired ${otherLang === 'nl' ? 'Dutch' : 'Polish'} category “${twin.name}” and its ${there.length} word(s) go too.`
-            : '';
+
+          let twinNote = '';
+          if (twin) {
+            twinNote = ` Its linked ${otherLabel} category “${twin.name}” and its ${there.length} word(s) go too.`;
+          } else {
+            const maybe = findPairingCandidate(existing, allCats, otherLang);
+            if (maybe) {
+              twinNote =
+                ` There is also a ${otherLabel} category called “${maybe.name}”, but it is NOT linked to this one, so it will be left alone` +
+                ` — delete it separately if you want it gone.`;
+            }
+          }
           if (!confirm(`Delete “${existing.name}” and its ${here.length} word(s)?${twinNote} This can't be undone.`)) {
             return;
           }
@@ -724,28 +735,50 @@ async function renderWords({ categoryId }) {
 // pl-cat-breakfast), (3) match by identical name, (4) create a counterpart
 // with the same name/emoji. The resolved pair is linked both ways so later
 // renames can't break it.
-// The other-language category that mirrors this one, or null — no creation and
-// no DB write (safe to call on a delete path). Matching order: (1) the stored
-// pairedCategoryId link, (2) seeded ids sharing a suffix (…cat-breakfast ↔
-// pl-cat-breakfast), (3) identical name.
-function findTwinCategory(category, cats, otherLang) {
+// STRONG identity — the only lookup allowed to authorize something destructive
+// (a cascading delete). A twin is certain in exactly two cases:
+//   1. a RECIPROCAL pairedCategoryId link (both records point at each other), or
+//   2. a deterministic seed pair (nl-cat-toys ↔ pl-cat-toys).
+// A same-name match is deliberately NOT identity here: a freshly mirrored
+// category starts out carrying the other language's name, and legacy/restored
+// data can collide by accident — deleting on a name guess would take an
+// unrelated category AND every word inside it, with no undo.
+function findLinkedTwinCategory(category, cats, otherLang) {
+  const inOtherLang = (c) => c && (c.language ?? 'nl') === otherLang;
+
+  if (category.pairedCategoryId) {
+    const linked = cats.find((c) => c.id === category.pairedCategoryId);
+    if (inOtherLang(linked) && linked.pairedCategoryId === category.id) return linked;
+  }
+  const seedSuffix = /(?:^|-)cat-(.+)$/.exec(category.id || '');
+  if (seedSuffix) {
+    const seedTwin = cats.find((c) => c.id === `${otherLang}-cat-${seedSuffix[1]}` && inOtherLang(c));
+    if (seedTwin) return seedTwin;
+  }
+  return null;
+}
+
+// WEAK, non-destructive guess at an existing counterpart when no strong link
+// exists yet: a one-way link, or an identical name. Used ONLY to adopt a
+// category and then link it properly (findOrCreatePairedCategory) — never to
+// authorize a delete.
+function findPairingCandidate(category, cats, otherLang) {
   const inOtherLang = (c) => c && (c.language ?? 'nl') === otherLang;
   if (category.pairedCategoryId) {
     const linked = cats.find((c) => c.id === category.pairedCategoryId);
     if (inOtherLang(linked)) return linked;
   }
-  const seedSuffix = /(?:^|-)cat-(.+)$/.exec(category.id || '');
-  if (seedSuffix) {
-    const m = cats.find((c) => c.id === `${otherLang}-cat-${seedSuffix[1]}` && inOtherLang(c));
-    if (m) return m;
-  }
   const name = (category.name || '').trim().toLowerCase();
+  if (!name) return null;
   return cats.find((c) => inOtherLang(c) && (c.name || '').trim().toLowerCase() === name) || null;
 }
 
 async function findOrCreatePairedCategory(category, otherLang) {
   const cats = await getAll('categories');
-  let match = findTwinCategory(category, cats, otherLang);
+  // Adopting on a weak match is fine here — the pair gets linked both ways
+  // below, which upgrades it to a strong (reciprocal) link for next time.
+  let match =
+    findLinkedTwinCategory(category, cats, otherLang) || findPairingCandidate(category, cats, otherLang);
   if (!match) {
     match = {
       id: newId(),
@@ -2067,7 +2100,7 @@ async function renderQuickRecord(view) {
     render();
     return;
   }
-  const category = await get('categories', word.categoryId);
+  const category = await getCategoryOrNull(word.categoryId);
   await attachPhotos([word]);
   const label = wordLabel(word);
 
@@ -2183,64 +2216,228 @@ async function renderQuickRecord(view) {
 // the paired category, and share the source word's photo so the twins link.
 // Audio is intentionally left empty — it then shows up in "Record missing
 // audio" for that language, exactly the follow-up the parent wanted.
-async function saveTranslationTwin(sourceWord, otherLang, fields) {
-  const text = (fields.text || '').trim();
-  if (!text) return;
-  const otherIsDutch = otherLang === 'nl';
-  const allWords = await getAll('words');
+// A word can legitimately carry no categoryId (damaged or leftover records —
+// see backup.js's isUsableWord), and IndexedDB throws DataError on a null key.
+// Never hand `get` an empty id.
+async function getCategoryOrNull(categoryId) {
+  if (!categoryId) return null;
+  return (await get('categories', categoryId)) || null;
+}
 
-  // Defensive: a photo-linked twin shouldn't exist (that's why this word was
-  // flagged), but if one appeared meanwhile, update it rather than duplicate.
-  let twin = sourceWord.photoId
-    ? allWords.find((w) => (w.language ?? 'nl') === otherLang && w.photoId === sourceWord.photoId) || null
-    : null;
+// An other-language word that already carries this exact name, and is NOT
+// already this word's photo-linked twin. Two words can share a spelling and
+// mean different things, so this is a question for the parent — never a
+// silent merge. Returns null when there's nothing to ask about.
+function findTranslationConflict(sourceWord, otherLang, text, allWords) {
+  const name = (text || '').trim().toLowerCase();
+  if (!name) return null;
+  return (
+    allWords.find(
+      (w) =>
+        (w.language ?? 'nl') === otherLang &&
+        (w.word || '').trim().toLowerCase() === name &&
+        !(sourceWord.photoId && w.photoId === sourceWord.photoId)
+    ) || null
+  );
+}
 
-  if (!twin) {
-    const byName = allWords.find(
-      (w) => (w.language ?? 'nl') === otherLang && (w.word || '').trim().toLowerCase() === text.toLowerCase()
-    );
-    if (byName) {
-      twin = { ...byName }; // adopt the existing same-name word and link its photo below
-    } else {
-      const category = await get('categories', sourceWord.categoryId);
-      const pairedCat = category ? await findOrCreatePairedCategory(category, otherLang) : null;
-      const now = Date.now();
-      twin = {
-        id: newId(),
-        categoryId: pairedCat ? pairedCat.id : sourceWord.categoryId,
-        language: otherLang,
-        article: otherIsDutch ? fields.article || 'de' : '',
-        word: '',
-        placeholderEmoji: sourceWord.placeholderEmoji || '🔤',
-        audioWord: null,
-        audioPhrase: null,
-        phraseText: '',
-        realWorldPrompt: '',
-        understandingStatus: 'not_introduced',
-        speechStatus: 'none',
-        useEen: otherIsDutch ? fields.useEen !== false : false,
-        excluded: false,
-        srsLevel: 0,
-        nextReviewDate: null,
-        dateIntroduced: null,
-        lastPracticed: null,
-        timesPracticed: 0,
-        createdAt: now,
-        updatedAt: now,
-      };
-    }
+function applyTwinGrammar(twin, otherLang, fields) {
+  if (otherLang !== 'nl') return;
+  twin.article = fields.article || twin.article || 'de';
+  if (fields.useEen != null) twin.useEen = fields.useEen;
+}
+
+// A brand-new word for this concept in the other language, sharing the source's
+// photo (that shared photoId is the ONLY thing that links twins). Audio is left
+// empty on purpose: the word then shows up in that language's "Record missing
+// audio" list, which is the parent's next step anyway.
+async function createNewTwin(sourceWord, otherLang, fields) {
+  const category = await getCategoryOrNull(sourceWord.categoryId);
+  const pairedCat = category ? await findOrCreatePairedCategory(category, otherLang) : null;
+  const now = Date.now();
+  const twin = {
+    id: newId(),
+    categoryId: pairedCat ? pairedCat.id : sourceWord.categoryId,
+    language: otherLang,
+    article: otherLang === 'nl' ? fields.article || 'de' : '',
+    word: (fields.text || '').trim(),
+    photoId: sourceWord.photoId || null,
+    placeholderEmoji: sourceWord.placeholderEmoji || '🔤',
+    audioWord: null,
+    audioPhrase: null,
+    phraseText: '',
+    realWorldPrompt: '',
+    understandingStatus: 'not_introduced',
+    speechStatus: 'none',
+    useEen: otherLang === 'nl' ? fields.useEen !== false : false,
+    excluded: false,
+    srsLevel: 0,
+    nextReviewDate: null,
+    dateIntroduced: null,
+    lastPracticed: null,
+    timesPracticed: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  applyTwinGrammar(twin, otherLang, fields);
+  await saveWord(twin);
+}
+
+// The parent confirmed the existing same-name word is the SAME concept. Adopt
+// it as the twin: move it into the paired category and give it the source's
+// photo as its primary, which is what actually links the pair. Its own former
+// picture is kept as an extra rather than thrown away, and its audio, progress
+// and grammar survive untouched.
+async function linkExistingAsTwin(sourceWord, otherLang, existingWord, fields) {
+  const twin = { ...existingWord };
+
+  // `photo` here can mean two different things:
+  //   - a TRUE legacy inline blob (photo, but no photoId) → migrate it to the
+  //     photos store and keep it as an extra, so the picture isn't lost;
+  //   - just the display blob attachPhotos() loaded from photoId → not legacy,
+  //     and re-saving it would duplicate the same image.
+  // Either way the blob must be OFF the record before we assign the source's
+  // photoId: saveWord() writes an inline `photo` into whatever photoId the
+  // record carries, which would overwrite the SOURCE's photo blob.
+  if (twin.photo && !twin.photoId) {
+    const legacyId = await savePhoto(twin.photo);
+    twin.extraPhotoIds = [...new Set([...(twin.extraPhotoIds || []), legacyId])];
   }
+  delete twin.photo;
 
-  twin.word = text;
+  // Demote its old primary photo to an extra so the picture isn't lost.
+  if (sourceWord.photoId && twin.photoId && twin.photoId !== sourceWord.photoId) {
+    const extras = new Set(twin.extraPhotoIds || []);
+    extras.add(twin.photoId);
+    extras.delete(sourceWord.photoId);
+    twin.extraPhotoIds = [...extras];
+  }
+  twin.photoId = sourceWord.photoId || twin.photoId || null;
+
+  const category = await getCategoryOrNull(sourceWord.categoryId);
+  const pairedCat = category ? await findOrCreatePairedCategory(category, otherLang) : null;
+  if (pairedCat) twin.categoryId = pairedCat.id;
+
+  twin.word = (fields.text || '').trim();
   twin.language = otherLang;
-  if (otherIsDutch) {
-    twin.article = fields.article || twin.article || 'de';
-    if (fields.useEen != null) twin.useEen = fields.useEen;
-  }
-  // Share the source photo unless the twin already has its own.
-  if (!twin.photoId && !twin.photo) twin.photoId = sourceWord.photoId || null;
+  applyTwinGrammar(twin, otherLang, fields);
   twin.updatedAt = Date.now();
   await saveWord(twin);
+}
+
+// Defensive: a photo-linked twin already exists (it shouldn't — that's why the
+// word was flagged — but it may have appeared since). Just refresh its text and
+// grammar instead of creating a duplicate.
+async function updateLinkedTwin(twin, otherLang, fields) {
+  const updated = { ...twin, word: (fields.text || '').trim(), language: otherLang, updatedAt: Date.now() };
+  applyTwinGrammar(updated, otherLang, fields);
+  await saveWord(updated);
+}
+
+// "You already have a word called that" — the one question the wizard must ask.
+// Shows both records side by side (picture, name, category) and lets the parent
+// decide. Nothing is written until they choose.
+async function renderTranslationConflict(view, sourceWord, otherLang, advance) {
+  const { existingId, fields } = view.conflict;
+  const existing = await get('words', existingId);
+  if (!existing) {
+    // Vanished since we asked — no conflict left; fall back to a plain create.
+    view.conflict = null;
+    await createNewTwin(sourceWord, otherLang, fields);
+    advance();
+    return;
+  }
+  await attachPhotos([existing]);
+  const existingCat = await getCategoryOrNull(existing.categoryId);
+  const sourceCat = await getCategoryOrNull(sourceWord.categoryId);
+
+  appEl.appendChild(
+    topbar({ title: 'Same thing?', onBack: () => { view.conflict = null; render(); } })
+  );
+  const screen = el('div', { class: 'screen' });
+
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: `You already have a ${(LANGUAGES.find((l) => l.code === otherLang) || {}).label || ''} word called “${(
+        fields.text || ''
+      ).trim()}”. Is it the same thing as this one, or a different word that just happens to share the name?`,
+    })
+  );
+
+  const pairRow = el('div', { class: 'conflict-pair' });
+  const sideOf = (w, cat, caption) => {
+    const box = el('div', { class: 'conflict-side' });
+    const thumb = el('div', { class: 'thumb large' });
+    if (w.photo) {
+      const img = el('img', { alt: '' });
+      img.src = URL.createObjectURL(w.photo);
+      thumb.appendChild(img);
+    } else {
+      thumb.textContent = w.placeholderEmoji || '🔤';
+    }
+    box.appendChild(thumb);
+    box.appendChild(el('div', { class: 'label-preview', text: wordLabel(w) }));
+    box.appendChild(
+      el('div', { class: 'settings-note', text: cat ? `${cat.emoji || '📁'} ${cat.name}` : 'No category' })
+    );
+    box.appendChild(el('div', { class: 'settings-note', text: caption }));
+    return box;
+  };
+  pairRow.appendChild(sideOf(sourceWord, sourceCat, 'the word you are translating'));
+  pairRow.appendChild(sideOf(existing, existingCat, 'the word you already have'));
+  screen.appendChild(pairRow);
+
+  const actions = el('div', { class: 'form-actions' });
+  actions.appendChild(
+    el('button', {
+      text: '✅ Same thing — link them',
+      onclick: async () => {
+        try {
+          await linkExistingAsTwin(sourceWord, otherLang, existing, fields);
+        } catch (err) {
+          alert(`Could not link the words: ${errText(err)}`);
+          return;
+        }
+        advance();
+      },
+    })
+  );
+  actions.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: '➕ Different word — keep both',
+      onclick: async () => {
+        try {
+          await createNewTwin(sourceWord, otherLang, fields);
+        } catch (err) {
+          alert(`Could not save the translation: ${errText(err)}`);
+          return;
+        }
+        advance();
+      },
+    })
+  );
+  actions.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: '‹ Change what I typed',
+      onclick: () => {
+        view.conflict = null;
+        render();
+      },
+    })
+  );
+  screen.appendChild(actions);
+
+  screen.appendChild(
+    el('p', {
+      class: 'settings-note',
+      text: '“Same thing” moves it into the matching category and gives it this picture (its old picture is kept as an extra). Its recordings and progress stay. “Different word” leaves it completely untouched.',
+    })
+  );
+
+  appEl.appendChild(screen);
 }
 
 // Quick "add missing translations" wizard: one untranslated word per screen,
@@ -2261,10 +2458,29 @@ async function renderAddTranslations(view) {
     return;
   }
   await attachPhotos([word]);
-  const category = await get('categories', word.categoryId);
+  const category = await getCategoryOrNull(word.categoryId);
   const otherLang = (word.language ?? 'nl') === 'nl' ? 'pl' : 'nl';
   const otherIsDutch = otherLang === 'nl';
   const otherLabel = (LANGUAGES.find((l) => l.code === otherLang) || {}).label || 'Word';
+
+  const isLast = index === wordIds.length - 1;
+  const advance = () => {
+    view.conflict = null;
+    if (isLast) {
+      pop();
+    } else {
+      view.index = index + 1;
+      render();
+    }
+  };
+
+  // The typed translation collided with an existing word — ask the parent
+  // rather than guessing (a wrong guess silently merges two concepts, or
+  // leaves the pair unlinked forever).
+  if (view.conflict && view.conflict.forWordId === word.id) {
+    await renderTranslationConflict(view, word, otherLang, advance);
+    return;
+  }
 
   const draft = { text: '', article: otherIsDutch ? 'de' : '', useEen: true };
 
@@ -2316,15 +2532,6 @@ async function renderAddTranslations(view) {
   }
 
   const nav = el('div', { class: 'form-actions' });
-  const isLast = index === wordIds.length - 1;
-  const advance = () => {
-    if (isLast) {
-      pop();
-    } else {
-      view.index = index + 1;
-      render();
-    }
-  };
   nav.appendChild(
     el('button', {
       text: isLast ? 'Save & finish' : 'Save & next ›',
@@ -2334,7 +2541,23 @@ async function renderAddTranslations(view) {
           return;
         }
         try {
-          await saveTranslationTwin(word, otherLang, draft);
+          const allWords = await getAll('words');
+          const linked = word.photoId
+            ? allWords.find((w) => (w.language ?? 'nl') === otherLang && w.photoId === word.photoId)
+            : null;
+          if (linked) {
+            await updateLinkedTwin(linked, otherLang, draft);
+            advance();
+            return;
+          }
+          const clash = findTranslationConflict(word, otherLang, draft.text, allWords);
+          if (clash) {
+            // Don't guess whether these are the same concept — ask (below).
+            view.conflict = { forWordId: word.id, existingId: clash.id, fields: { ...draft } };
+            render();
+            return;
+          }
+          await createNewTwin(word, otherLang, draft);
         } catch (err) {
           alert(`Could not save the translation: ${errText(err)}`);
           return;
@@ -2629,7 +2852,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=40');
+    const { startRecordingPage } = await import('./record.js?v=41');
     startRecordingPage(recordGistId);
     return;
   }

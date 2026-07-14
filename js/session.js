@@ -2,6 +2,7 @@ import {
   getAll,
   get,
   put,
+  putAllTransactional,
   isSessionEligible,
   isWordAllowedInSessions,
   isDue,
@@ -11,11 +12,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=40';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=40';
-import { el, shuffle, onTap } from './dom.js?v=40';
-import { mountParentGate } from './gate.js?v=40';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=40';
+} from './db.js?v=41';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=41';
+import { el, shuffle, onTap } from './dom.js?v=41';
+import { mountParentGate } from './gate.js?v=41';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=41';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -548,18 +549,55 @@ function renderEndScreen(state) {
   }
   screen.appendChild(list);
 
+  // Saving can genuinely fail (storage full, IndexedDB unavailable). If it
+  // does, the parent must not be stranded on a dead button: show what went
+  // wrong in plain language, let them retry, and offer a way out that doesn't
+  // pretend the progress was saved. `saving` also guards against a double tap
+  // counting the session's practice twice.
   const doneBtn = el('button', { type: 'button', class: 'session-continue', text: 'Done' });
+  const saveError = el('div', { class: 'session-save-error', hidden: true });
+  const errorText = el('p', { class: 'session-hint', text: '' });
+  const exitAnywayBtn = el('button', {
+    type: 'button',
+    class: 'session-secondary',
+    text: 'Exit without saving',
+  });
+  onTap(exitAnywayBtn, () => exitSession());
+  saveError.appendChild(errorText);
+  saveError.appendChild(exitAnywayBtn);
+
+  let saving = false;
   onTap(doneBtn, async () => {
-    await saveObservations(state);
-    exitSession();
+    if (saving) return;
+    saving = true;
+    doneBtn.disabled = true;
+    doneBtn.textContent = 'Saving…';
+    saveError.hidden = true;
+    try {
+      await saveObservations(state);
+      exitSession();
+    } catch (err) {
+      saving = false;
+      doneBtn.disabled = false;
+      doneBtn.textContent = 'Try again';
+      errorText.textContent = `Her progress could not be saved: ${
+        (err && err.message) || 'the phone’s storage is unavailable'
+      }. Your words, photos and recordings are safe — only this session’s progress is affected.`;
+      saveError.hidden = false;
+    }
   });
   screen.appendChild(doneBtn);
+  screen.appendChild(saveError);
 
   sessionEl.appendChild(screen);
 }
 
+// Builds every word update first, then commits them in ONE transaction — a
+// failure part-way (quota, iOS killing the app) must not leave half the
+// session's progress saved and half lost.
 async function saveObservations(state) {
   const now = Date.now();
+  const updates = [];
   for (const { word } of state.steps) {
     const obs = state.observations[word.id] || { understood: false, said: false };
     const fresh = await get('words', word.id);
@@ -589,6 +627,9 @@ async function saveObservations(state) {
     updated.srsLevel = obs.understood ? Math.min(level + 1, SRS_INTERVAL_DAYS.length - 1) : level;
 
     updated.updatedAt = now;
-    await put('words', updated);
+    updates.push(updated);
+  }
+  if (updates.length > 0) {
+    await putAllTransactional({ words: updates }, 'saving her progress');
   }
 }
