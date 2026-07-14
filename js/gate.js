@@ -1,10 +1,10 @@
-import { el } from './dom.js?v=39';
+import { el } from './dom.js?v=40';
 
 const sessionEl = document.getElementById('session');
 
 // Hold-to-exit parent gate, shared by session mode (session.js) and the
 // child-first flow (child.js). Appends the gate to the #session overlay;
-// a completed 3-second hold calls onExit.
+// a completed 1.5-second hold calls onExit.
 export function mountParentGate(onExit) {
   const gate = el('button', { type: 'button', class: 'parent-gate', 'aria-label': 'Hold to exit to parent area' });
   const dot = el('div', { class: 'parent-gate-dot' });
@@ -23,7 +23,7 @@ export function mountParentGate(onExit) {
     timer = setTimeout(() => {
       fill.classList.remove('filling');
       onExit();
-    }, 3000);
+    }, 1500);
   };
   const cancel = () => {
     clearTimeout(timer);

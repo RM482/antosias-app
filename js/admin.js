@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=39';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=39';
-import { startSession, initSession, showStickerBook } from './session.js?v=39';
-import { startChildMode } from './child.js?v=39';
-import { el } from './dom.js?v=39';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=39';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=40';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=40';
+import { startSession, initSession, showStickerBook } from './session.js?v=40';
+import { startChildMode } from './child.js?v=40';
+import { el } from './dom.js?v=40';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=40';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -341,6 +341,36 @@ async function renderCategories() {
     );
   }
 
+  // Quick-translate entry: active-language words that have a picture but no
+  // twin in the other language yet. Sharing the photo is how twins link, so we
+  // only flag words that HAVE a photo (a photo-less word has nothing to link a
+  // translation to, and isn't session-ready anyway).
+  const otherLang = lang === 'nl' ? 'pl' : 'nl';
+  const otherLabel = (LANGUAGES.find((l) => l.code === otherLang) || {}).label || 'other language';
+  const untranslated = words.filter(
+    (w) =>
+      w.excluded !== true &&
+      w.photoId &&
+      !allWords.some((o) => (o.language ?? 'nl') === otherLang && o.photoId === w.photoId)
+  );
+  if (untranslated.length > 0) {
+    const catOrder = new Map(categories.map((c, i) => [c.id, i]));
+    untranslated.sort(
+      (a, b) =>
+        (catOrder.get(a.categoryId) ?? 999) - (catOrder.get(b.categoryId) ?? 999) ||
+        (a.createdAt ?? 0) - (b.createdAt ?? 0)
+    );
+    screen.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: `➕ Add missing ${otherLabel} translations (${untranslated.length})`,
+        style: 'margin-top:8px;width:100%;',
+        onclick: () =>
+          push({ screen: 'addTranslations', wordIds: untranslated.map((w) => w.id), index: 0 }),
+      })
+    );
+  }
+
   // Both buttons produce the same export file; they differ in intent and
   // messaging. Backup = safety copy for yourself, never size-gated.
   // Share = destined for a public-if-you-have-the-link Gist, so it gets a
@@ -490,16 +520,29 @@ async function renderCategoryEdit({ categoryId }) {
         if (isNew) {
           const [allCats, settings] = await Promise.all([getAll('categories'), getSettings()]);
           const maxOrder = allCats.reduce((m, c) => Math.max(m, c.order ?? 0), -1);
-          await put('categories', {
+          const lang = settings.language || 'nl'; // new category belongs to the active language
+          const created = {
             id: newId(),
             name: draft.name.trim(),
             emoji: draft.emoji.trim() || '🙂',
-            language: settings.language || 'nl', // new category belongs to the active language
+            language: lang,
             order: maxOrder + 1,
             createdAt: Date.now(),
-          });
+          };
+          await put('categories', created);
+          // Mirror: create the matching category in the other language so both
+          // flags stay in step. The twin starts with the same name (we can't
+          // translate) and emoji — rename it on the other flag when convenient.
+          await findOrCreatePairedCategory(created, lang === 'nl' ? 'pl' : 'nl');
         } else {
-          await put('categories', { ...existing, name: draft.name.trim(), emoji: draft.emoji.trim() || '🙂' });
+          const updated = { ...existing, name: draft.name.trim(), emoji: draft.emoji.trim() || '🙂' };
+          await put('categories', updated);
+          // Mirror the emoji (the picture of the concept) to the paired
+          // category; names stay language-specific, so we don't touch those.
+          const twin = await findOrCreatePairedCategory(updated, (updated.language ?? 'nl') === 'nl' ? 'pl' : 'nl');
+          if (twin && twin.emoji !== updated.emoji) {
+            await put('categories', { ...twin, emoji: updated.emoji });
+          }
         }
         pop();
       },
@@ -512,13 +555,25 @@ async function renderCategoryEdit({ categoryId }) {
         class: 'btn-danger',
         text: 'Delete category (and its words)',
         onclick: async () => {
-          const words = await getAll('words');
-          const toDelete = words.filter((w) => w.categoryId === categoryId);
-          if (!confirm(`Delete "${existing.name}" and its ${toDelete.length} word(s)? This can't be undone.`)) {
+          const [words, allCats] = await Promise.all([getAll('words'), getAll('categories')]);
+          const otherLang = (existing.language ?? 'nl') === 'nl' ? 'pl' : 'nl';
+          // Mirror the delete to the paired category. Look it up WITHOUT
+          // creating one (findTwinCategory, not findOrCreate).
+          const twin = findTwinCategory(existing, allCats, otherLang);
+          const here = words.filter((w) => w.categoryId === categoryId);
+          const there = twin ? words.filter((w) => w.categoryId === twin.id) : [];
+          const twinNote = twin
+            ? ` Its paired ${otherLang === 'nl' ? 'Dutch' : 'Polish'} category “${twin.name}” and its ${there.length} word(s) go too.`
+            : '';
+          if (!confirm(`Delete “${existing.name}” and its ${here.length} word(s)?${twinNote} This can't be undone.`)) {
             return;
           }
-          for (const w of toDelete) await deleteWordAndCleanup(w.id);
+          for (const w of here) await deleteWordAndCleanup(w.id);
           await remove('categories', categoryId);
+          if (twin) {
+            for (const w of there) await deleteWordAndCleanup(w.id);
+            await remove('categories', twin.id);
+          }
           pop();
         },
       })
@@ -669,25 +724,28 @@ async function renderWords({ categoryId }) {
 // pl-cat-breakfast), (3) match by identical name, (4) create a counterpart
 // with the same name/emoji. The resolved pair is linked both ways so later
 // renames can't break it.
-async function findOrCreatePairedCategory(category, otherLang) {
-  const cats = await getAll('categories');
+// The other-language category that mirrors this one, or null — no creation and
+// no DB write (safe to call on a delete path). Matching order: (1) the stored
+// pairedCategoryId link, (2) seeded ids sharing a suffix (…cat-breakfast ↔
+// pl-cat-breakfast), (3) identical name.
+function findTwinCategory(category, cats, otherLang) {
   const inOtherLang = (c) => c && (c.language ?? 'nl') === otherLang;
-
-  let match = null;
   if (category.pairedCategoryId) {
     const linked = cats.find((c) => c.id === category.pairedCategoryId);
-    if (inOtherLang(linked)) match = linked;
+    if (inOtherLang(linked)) return linked;
   }
-  if (!match) {
-    const seedSuffix = /(?:^|-)cat-(.+)$/.exec(category.id || '');
-    if (seedSuffix) {
-      match = cats.find((c) => c.id === `${otherLang}-cat-${seedSuffix[1]}` && inOtherLang(c)) || null;
-    }
+  const seedSuffix = /(?:^|-)cat-(.+)$/.exec(category.id || '');
+  if (seedSuffix) {
+    const m = cats.find((c) => c.id === `${otherLang}-cat-${seedSuffix[1]}` && inOtherLang(c));
+    if (m) return m;
   }
-  if (!match) {
-    const name = (category.name || '').trim().toLowerCase();
-    match = cats.find((c) => inOtherLang(c) && (c.name || '').trim().toLowerCase() === name) || null;
-  }
+  const name = (category.name || '').trim().toLowerCase();
+  return cats.find((c) => inOtherLang(c) && (c.name || '').trim().toLowerCase() === name) || null;
+}
+
+async function findOrCreatePairedCategory(category, otherLang) {
+  const cats = await getAll('categories');
+  let match = findTwinCategory(category, cats, otherLang);
   if (!match) {
     match = {
       id: newId(),
@@ -1344,6 +1402,59 @@ async function renderSettings() {
       importRecordingsInput,
     ])
   );
+
+  // --- Manage stickers ---
+  // Settings is the parent area (reached from the home screen, not child
+  // mode), so resetting or pruning here can't be done by Antosia herself.
+  const stickersRec = await get('meta', 'stickers').catch(() => null);
+  const stickerList = (stickersRec && Array.isArray(stickersRec.value) && stickersRec.value) || [];
+  const stickerChildren = [];
+  if (stickerList.length === 0) {
+    stickerChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: 'No stickers yet. Antosia earns one each time she finishes a session.',
+      })
+    );
+  } else {
+    stickerChildren.push(
+      el('p', {
+        class: 'settings-note',
+        text: `${stickerList.length} sticker${stickerList.length === 1 ? '' : 's'} collected. Tap one to remove it.`,
+      })
+    );
+    const grid = el('div', { class: 'sticker-manage-grid' });
+    stickerList.forEach((s, i) => {
+      grid.appendChild(
+        el('button', {
+          type: 'button',
+          class: 'sticker-manage-cell',
+          text: s.emoji,
+          'aria-label': `Remove sticker ${s.emoji}`,
+          onclick: async () => {
+            if (!confirm(`Remove this ${s.emoji} sticker from Antosia’s book?`)) return;
+            const next = stickerList.filter((_, j) => j !== i);
+            await put('meta', { key: 'stickers', value: next });
+            render();
+          },
+        })
+      );
+    });
+    stickerChildren.push(grid);
+    stickerChildren.push(
+      el('button', {
+        class: 'btn-danger',
+        text: 'Reset all stickers',
+        style: 'width:100%;margin-top:12px;',
+        onclick: async () => {
+          if (!confirm(`Remove all ${stickerList.length} stickers? This can’t be undone.`)) return;
+          await put('meta', { key: 'stickers', value: [] });
+          render();
+        },
+      })
+    );
+  }
+  screen.appendChild(card('⭐ Stickers', stickerChildren));
 
   // --- Backup reminder ---
   const last = settings.lastBackupAt;
@@ -2066,6 +2177,189 @@ async function renderQuickRecord(view) {
   appEl.appendChild(screen);
 }
 
+// Create/link the other-language twin for `sourceWord` from a typed
+// translation. Mirrors the word editor's paired-word save (admin.js Save
+// handler): reuse a same-name word if one exists, else create a new word in
+// the paired category, and share the source word's photo so the twins link.
+// Audio is intentionally left empty — it then shows up in "Record missing
+// audio" for that language, exactly the follow-up the parent wanted.
+async function saveTranslationTwin(sourceWord, otherLang, fields) {
+  const text = (fields.text || '').trim();
+  if (!text) return;
+  const otherIsDutch = otherLang === 'nl';
+  const allWords = await getAll('words');
+
+  // Defensive: a photo-linked twin shouldn't exist (that's why this word was
+  // flagged), but if one appeared meanwhile, update it rather than duplicate.
+  let twin = sourceWord.photoId
+    ? allWords.find((w) => (w.language ?? 'nl') === otherLang && w.photoId === sourceWord.photoId) || null
+    : null;
+
+  if (!twin) {
+    const byName = allWords.find(
+      (w) => (w.language ?? 'nl') === otherLang && (w.word || '').trim().toLowerCase() === text.toLowerCase()
+    );
+    if (byName) {
+      twin = { ...byName }; // adopt the existing same-name word and link its photo below
+    } else {
+      const category = await get('categories', sourceWord.categoryId);
+      const pairedCat = category ? await findOrCreatePairedCategory(category, otherLang) : null;
+      const now = Date.now();
+      twin = {
+        id: newId(),
+        categoryId: pairedCat ? pairedCat.id : sourceWord.categoryId,
+        language: otherLang,
+        article: otherIsDutch ? fields.article || 'de' : '',
+        word: '',
+        placeholderEmoji: sourceWord.placeholderEmoji || '🔤',
+        audioWord: null,
+        audioPhrase: null,
+        phraseText: '',
+        realWorldPrompt: '',
+        understandingStatus: 'not_introduced',
+        speechStatus: 'none',
+        useEen: otherIsDutch ? fields.useEen !== false : false,
+        excluded: false,
+        srsLevel: 0,
+        nextReviewDate: null,
+        dateIntroduced: null,
+        lastPracticed: null,
+        timesPracticed: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+  }
+
+  twin.word = text;
+  twin.language = otherLang;
+  if (otherIsDutch) {
+    twin.article = fields.article || twin.article || 'de';
+    if (fields.useEen != null) twin.useEen = fields.useEen;
+  }
+  // Share the source photo unless the twin already has its own.
+  if (!twin.photoId && !twin.photo) twin.photoId = sourceWord.photoId || null;
+  twin.updatedAt = Date.now();
+  await saveWord(twin);
+}
+
+// Quick "add missing translations" wizard: one untranslated word per screen,
+// type the other-language word (+ de/het for Dutch), reuse the same photo.
+async function renderAddTranslations(view) {
+  const wordIds = view.wordIds || [];
+  const index = view.index ?? 0;
+  if (wordIds.length === 0 || index >= wordIds.length) {
+    pop();
+    return;
+  }
+  const word = await get('words', wordIds[index]);
+  if (!word) {
+    // Deleted since the wizard opened — drop it and re-render at this index.
+    view.wordIds = wordIds.filter((id) => id !== wordIds[index]);
+    if (view.index >= view.wordIds.length) view.index = Math.max(0, view.wordIds.length - 1);
+    render();
+    return;
+  }
+  await attachPhotos([word]);
+  const category = await get('categories', word.categoryId);
+  const otherLang = (word.language ?? 'nl') === 'nl' ? 'pl' : 'nl';
+  const otherIsDutch = otherLang === 'nl';
+  const otherLabel = (LANGUAGES.find((l) => l.code === otherLang) || {}).label || 'Word';
+
+  const draft = { text: '', article: otherIsDutch ? 'de' : '', useEen: true };
+
+  appEl.appendChild(topbar({ title: `➕ ${index + 1} / ${wordIds.length}`, onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+
+  if (category) {
+    screen.appendChild(
+      el('p', { class: 'settings-note', style: 'text-align:center;', text: `${category.emoji || '📁'} ${category.name}` })
+    );
+  }
+
+  const thumb = el('div', { class: 'thumb large', style: 'margin:0 auto 10px;' });
+  if (word.photo) {
+    const img = el('img', { alt: '' });
+    img.src = URL.createObjectURL(word.photo);
+    thumb.appendChild(img);
+  } else {
+    thumb.textContent = word.placeholderEmoji || '🔤';
+  }
+  screen.appendChild(thumb);
+  screen.appendChild(
+    el('div', { class: 'label-preview', style: 'text-align:center;margin-bottom:14px;', text: wordLabel(word) })
+  );
+
+  screen.appendChild(
+    el('div', { class: 'field' }, [
+      el('label', { text: `${otherLabel} word` }),
+      el('input', {
+        type: 'text',
+        value: '',
+        placeholder: otherIsDutch ? 'e.g. banaan' : 'e.g. banan',
+        oninput: (e) => (draft.text = e.target.value),
+      }),
+    ])
+  );
+
+  if (otherIsDutch) {
+    buildSegmented(screen, {
+      label: 'Article',
+      options: [
+        { label: 'de', value: 'de' },
+        { label: 'het', value: 'het' },
+        { label: '(none)', value: '' },
+      ],
+      value: draft.article,
+      onChange: (v) => (draft.article = v),
+    });
+  }
+
+  const nav = el('div', { class: 'form-actions' });
+  const isLast = index === wordIds.length - 1;
+  const advance = () => {
+    if (isLast) {
+      pop();
+    } else {
+      view.index = index + 1;
+      render();
+    }
+  };
+  nav.appendChild(
+    el('button', {
+      text: isLast ? 'Save & finish' : 'Save & next ›',
+      onclick: async () => {
+        if (!draft.text.trim()) {
+          alert(`Type the ${otherLabel} word, or tap Skip.`);
+          return;
+        }
+        try {
+          await saveTranslationTwin(word, otherLang, draft);
+        } catch (err) {
+          alert(`Could not save the translation: ${errText(err)}`);
+          return;
+        }
+        advance();
+      },
+    })
+  );
+  nav.appendChild(el('button', { class: 'btn-secondary', text: isLast ? 'Skip & finish' : 'Skip ›', onclick: advance }));
+  if (index > 0) {
+    nav.appendChild(
+      el('button', {
+        class: 'btn-secondary',
+        text: '‹ Previous',
+        onclick: () => {
+          view.index = index - 1;
+          render();
+        },
+      })
+    );
+  }
+  screen.appendChild(nav);
+  appEl.appendChild(screen);
+}
+
 async function renderPersonRecordPhrases({ personId }) {
   const person = await get('people', personId);
   if (!person) {
@@ -2302,6 +2596,7 @@ async function render() {
   if (view.screen === 'people') return renderPeople();
   if (view.screen === 'personEdit') return renderPersonEdit(view);
   if (view.screen === 'quickRecord') return renderQuickRecord(view);
+  if (view.screen === 'addTranslations') return renderAddTranslations(view);
   if (view.screen === 'personRecord') return renderPersonRecord(view);
   if (view.screen === 'personRecordWords') return renderPersonRecordWords(view);
   if (view.screen === 'personRecordPhrases') return renderPersonRecordPhrases(view);
@@ -2334,7 +2629,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=39');
+    const { startRecordingPage } = await import('./record.js?v=40');
     startRecordingPage(recordGistId);
     return;
   }

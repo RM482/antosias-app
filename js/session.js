@@ -11,11 +11,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=39';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=39';
-import { el, shuffle, onTap } from './dom.js?v=39';
-import { mountParentGate } from './gate.js?v=39';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=39';
+} from './db.js?v=40';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=40';
+import { el, shuffle, onTap } from './dom.js?v=40';
+import { mountParentGate } from './gate.js?v=40';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=40';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
@@ -156,7 +156,10 @@ export async function startSession(categoryId, opts = {}) {
   const mode = opts.mode === 'test' ? 'test' : 'practice';
   const optionCount = mode === 'test' ? Math.min(4, Math.max(2, opts.optionCount || 2)) : 2;
 
-  const sessionWords = selectSessionWords(eligibleInCategory);
+  // Spaced repetition decides WHICH words to practise (selectSessionWords);
+  // shuffle only their presentation order so a session doesn't always open on
+  // the same word (the least-understood one always sorted first otherwise).
+  const sessionWords = shuffle(selectSessionWords(eligibleInCategory));
   const steps = sessionWords.map((word) => ({
     word,
     distractors: pickDistractors(word, eligibleInCategory, allEligible, optionCount - 1),
