@@ -51,9 +51,24 @@ export function pickSupportedMimeType() {
 // backgrounded/closed (see the listeners below), which also clears the "mic
 // in use" indicator; the next visit asks once more.
 let micStream = null;
+
+// A cached stream is only reusable while it still has a LIVE, UNMUTED track.
+// iOS mutes the track (readyState stays 'live') when something interrupts the
+// mic mid-session — a notification, Siri, an incoming call. A muted track keeps
+// "recording" but captures zero audio, so it must count as unusable: otherwise
+// every take after the interruption is silently empty (the mic looks fine).
+function micStreamUsable(stream) {
+  if (!stream || !stream.active) return false;
+  return stream.getAudioTracks().some((t) => t.readyState === 'live' && !t.muted);
+}
+
 async function getMicStream() {
-  if (micStream && micStream.active && micStream.getAudioTracks().some((t) => t.readyState === 'live')) {
-    return micStream;
+  if (micStreamUsable(micStream)) return micStream;
+  // Drop a stale/interrupted stream before re-acquiring, so iOS hands us a
+  // fresh live capture instead of handing back the muted one it was holding.
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
   }
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   return micStream;

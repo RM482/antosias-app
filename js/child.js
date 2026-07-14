@@ -1,8 +1,8 @@
-import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=38';
-import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=38';
-import { el, onTap } from './dom.js?v=38';
-import { startSession } from './session.js?v=38';
-import { mountParentGate } from './gate.js?v=38';
+import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=39';
+import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=39';
+import { el, onTap } from './dom.js?v=39';
+import { startSession } from './session.js?v=39';
+import { mountParentGate } from './gate.js?v=39';
 
 // Child-first flow (Stage 6; reordered 10 July 2026 per parent request —
 // supersedes STAGE_6_PLAN.md contract C1's original order):

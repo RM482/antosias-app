@@ -1,9 +1,9 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=38';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=38';
-import { startSession, initSession, showStickerBook } from './session.js?v=38';
-import { startChildMode } from './child.js?v=38';
-import { el } from './dom.js?v=38';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=38';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=39';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=39';
+import { startSession, initSession, showStickerBook } from './session.js?v=39';
+import { startChildMode } from './child.js?v=39';
+import { el } from './dom.js?v=39';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=39';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -2334,7 +2334,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=38');
+    const { startRecordingPage } = await import('./record.js?v=39');
     startRecordingPage(recordGistId);
     return;
   }
