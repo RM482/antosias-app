@@ -1,16 +1,23 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 14 July 2026, end of session) — live app `?v=40`
+## Status (as of 14 July 2026, end of session) — live app `?v=42`
 
-**Everything is code-complete, deployed, and locally verified (headless
-Chromium, measured screenshots, zero console errors). Nothing is half-built.
-The whole outstanding list is ON-PHONE TESTING (§ below) — it has grown, so
-next session should start there.**
+**Everything shipped is code-complete, deployed, and locally verified (headless
+Chromium, zero console errors). Nothing is half-built.**
+
+**⏸️ ONE WORKSTREAM IS PAUSED MID-FLIGHT — read `TWIN_LINK_PLAN.md` (v3) and
+"PAUSED: translation linking" below before doing anything else.** Release 1 of it
+shipped (v42, non-destructive); Release 2 (the data migration) is designed,
+vetted twice, and **not built** — it is waiting on one final Codex review.
+
+Everything else outstanding is ON-PHONE TESTING (§ below).
 
 Shipped newest first:
 
 | v | What |
 |---|---|
+| v42 | **Translation linking, Release 1 (non-destructive).** New `js/concepts.js`: the twin-pairing rules, deliberately PURE + SYNCHRONOUS so Release 2 can run them inside a `versionchange` transaction. `SEED_DATA` gains a shared `key` per concept (banaan/banan = 'banana'). New Settings → "🔗 Translation linking": backup gate, the intact starter set proposed as ONE batch confirmation, ambiguous photo groups resolved by the parent (default: leave separate). Decisions stored under `meta` key `twinAudit` with a dataset signature. Writes NO word records. |
+| v41 | Four fixes from a code review, 3 of them v40 regressions: category delete could destroy an **unrelated** same-named category and all its words (name-match no longer authorises anything destructive — only a reciprocal link or a seed pair does); the translation wizard could silently fail to link a twin (now an in-app "same thing?" conflict screen); the parent gate only half-filled (JS 1.5s vs CSS 3s); the end-screen Done button trapped the parent on a save failure (now disables while saving, reports the error, offers Retry / exit-without-saving; observations save in ONE transaction). |
 | v40 | Six real-use fixes: session word order shuffled (no longer always the same first word); choice photos show whole (object-fit: contain, uncropped); parent hold-to-exit 3s→1.5s; ⭐ Stickers manager in Settings (remove one / reset all); Dutch↔Polish category pairs mirror (add/delete/emoji-change propagate; delete removes the twin + its words; names stay per-language); "➕ Add missing translations" wizard on the flag (type the twin word + de/het, reuses the photo, then surfaces in that language's "Record missing audio") |
 | v39 | iOS mic fix: a muted/interrupted capture stream (notification, Siri, call) is dropped and re-acquired instead of reused — stops silent-empty recordings after an interruption |
 | v38 | Real-use fixes: pictures ~50% bigger (2 choices now stack vertically; 3 = 2+1 grid, 4 = 2×2), interim real-world-prompt screen REMOVED (correct tap → next word, both modes), ⭐ Sticker book screen (home button, parent-gate exit), end-screen sticker/text overlap fixed |
@@ -46,14 +53,103 @@ Notes for the next session:
 
 ---
 
+## ⏸️ PAUSED: translation linking (resume here)
+
+**Paused 14 July 2026 at the parent's request. Spec: `TWIN_LINK_PLAN.md` (v3,
+build-ready).**
+
+### The problem being fixed
+
+A word's language twin is identified **only** by a shared `photoId`
+(`js/admin.js:355`, `:860`, `:2518`, `:2825`). So **a word with no picture can
+never have a twin** — the parent cannot quickly add the Polish for a Dutch word
+she has recorded but never photographed. This is her actual, still-unfixed
+complaint. (A photo-less word IS playable — `isSessionEligible` needs only audio,
+`js/db.js:293`, and `wordVisual` falls back to the emoji, `js/session.js:210` — so
+"just require a photo" was considered and **rejected**.)
+
+### The fix
+
+Add `conceptId` to words. Twins = same `conceptId`, different language; at most
+one word per language per concept. `photoId` stays a picture, not identity.
+
+### Where we got to
+
+- **Release 1 — DONE and shipped (v42).** Non-destructive: the audit screen,
+  `js/concepts.js` (pure planner), seed keys, parent decisions stored under the
+  `meta` key `twinAudit`. Verified: renamed/duplicated seed words → cohort
+  refused; a family photo across 3 words → flagged, never auto-paired; no word
+  record touched.
+- **Release 2 — DESIGNED, NOT BUILT.** One atomic `versionchange` transaction:
+  read all words → run the `js/concepts.js` planner → assign every `conceptId`
+  → **normalise every `language`** → create a unique `[conceptId, language]`
+  index → verify → commit or abort. Then switch the four twin lookups to
+  `findTwin()` and **drop the `w.photoId &&` clause** from the translations
+  filter (`js/admin.js:355`) — that is the line that actually fixes her problem.
+
+### Next action when resuming
+
+1. **Get the final Codex vet of Release 2** (the destructive half). It was blocked
+   only because the files weren't in Codex's workspace — the parent must copy the
+   project there first (Claude cannot: macOS blocks `~/Documents`).
+2. Do **not** build Release 2 until that vet says go, and not before confirming the
+   parent has a fresh backup. It rewrites the only copy of her recordings.
+
+### Non-negotiables already established (do not re-litigate)
+
+- **Never pair on inference.** Only a photo shared by exactly one Dutch + one
+  Polish word, or an intact seed cohort the parent confirms as a batch. A
+  same-name or same-text match is **not** evidence.
+- **`js/concepts.js` must stay pure and synchronous** — Release 2 runs it inside a
+  `versionchange` transaction, where awaiting a non-IDB promise auto-commits half
+  a migration.
+- **Legacy words can have NO `language` field** (the code has always read
+  `language ?? 'nl'`). IndexedDB skips records whose compound key path has a
+  missing component, so the unique index would silently NOT enforce the invariant
+  on exactly those legacy Dutch words. The migration MUST persist a normalised
+  `language`.
+- **A migration failure screen is required.** The new JS installs even when the
+  upgrade aborts, so a deterministic failure would otherwise brick the app on
+  every launch.
+- Also still owed by the plan: photo forking (`saveWord` overwrites a shared photo
+  blob in place, so editing one twin's picture changes both), and routing the word
+  editor's silent same-name adoption through the conflict screen.
+
+### Known follow-ups, deliberately deferred
+
+- Backup restore's **referential validation** (it is already atomic via
+  `putAllTransactional`; the gap is that it accepts a word whose category doesn't
+  exist, leaving an invisible record).
+- Broader write atomicity for category and word+photo saves.
+- The on-phone **mic-interruption-during-an-active-take** test (v39 repairs the
+  *next* take; a take interrupted mid-recording is not detected).
+
+---
+
 ## ON-PHONE TESTING CHECKLIST for next time
 
 **Before anything: force-quit the app on the phone and reopen it** — that's how
-it picks up v40. (Home Screen icon only; never delete it, never clear Safari
+it picks up v42. (Home Screen icon only; never delete it, never clear Safari
 data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it includes
 people and recordings now.
 
-### 0a. v40 fixes — quickest tour, do this first
+### 0c. v42 — translation linking, Release 1 (untested on phone)
+Settings → **🔗 Translation linking**. It changes nothing; it only asks. Expect:
+a backup gate (Save is disabled until you back up *in that flow*), then the
+starter-set batch (`de banaan ↔ banan`, …) to confirm, then any ambiguous groups.
+**If any proposed starter pair looks wrong, do NOT tick it — report it instead.**
+That list is derived, and the parent's eyes are the check on it.
+
+### 0b. v41 — review fixes (untested on phone)
+- **Category delete is now safe:** deleting a category only removes the
+  other-language one when they are genuinely linked. If an unlinked same-named
+  category exists, the confirm box says it is being left alone.
+- **Translations wizard asks:** typing a translation that matches an existing word
+  now shows a "Same thing?" screen with both words side by side.
+- **Parent gate:** the dot now fills fully in ~1.5s (it used to stop halfway).
+- **End-of-session Done:** if saving fails it now says so and offers Retry.
+
+### 0a. v40 fixes — quickest tour
 - **Add translations:** on the 🇳🇱 flag, look under "Record missing audio" for
   **"➕ Add missing Polish translations (N)"** (only appears for words that have
   a picture but no twin yet). Add a couple (type the word; de/het picker shows
