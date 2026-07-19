@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=42';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=42';
-import { startSession, initSession, showStickerBook } from './session.js?v=42';
-import { startChildMode } from './child.js?v=42';
-import { el } from './dom.js?v=42';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=42';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=42';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=43';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=43';
+import { startSession, initSession, showStickerBook } from './session.js?v=43';
+import { startChildMode } from './child.js?v=43';
+import { el } from './dom.js?v=43';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=43';
+import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=43';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -3132,7 +3132,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=42');
+    const { startRecordingPage } = await import('./record.js?v=43');
     startRecordingPage(recordGistId);
     return;
   }

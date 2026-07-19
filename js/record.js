@@ -1,6 +1,6 @@
-import { el } from './dom.js?v=42';
-import { recordAudio, downscaleImage, playBlob } from './media.js?v=42';
-import { fetchGistText, blobToDataUrl, shareJsonFile } from './backup.js?v=42';
+import { el } from './dom.js?v=43';
+import { recordAudio, downscaleImage, playBlob } from './media.js?v=43';
+import { fetchGistText, blobToDataUrl, shareJsonFile } from './backup.js?v=43';
 
 // The family member's recording page (Stage 6 Phase C, plan §4.2), reached
 // via ?record=<gistId>. Contract C5: this module NEVER touches IndexedDB —

@@ -1,4 +1,4 @@
-import { SEED_DATA } from './db.js?v=42';
+import { SEED_DATA } from './db.js?v=43';
 
 // Language-twin planning (TWIN_LINK_PLAN.md).
 //
