@@ -466,11 +466,14 @@ async function renderCategories() {
         // damaged clip, and some are duplicates where a better copy won. Saying
         // "cannot be restored" about all of them would misdescribe it.
         const lost = analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length;
-        const headline = lost
-          ? `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored, and there ${
-              analysis.omitted.length - lost === 1 ? 'is 1 other note' : `are ${analysis.omitted.length - lost} other notes`
-            }:`
-          : `${analysis.omitted.length} thing${analysis.omitted.length === 1 ? '' : 's'} to know about this backup:`;
+        const others = analysis.omitted.length - lost;
+        const headline = !lost
+          ? `${others} thing${others === 1 ? '' : 's'} to know about this backup:`
+          : others === 0
+            ? `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored:`
+            : `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored, and there ${
+                others === 1 ? 'is 1 other note' : `are ${others} other notes`
+              }:`;
         const proceed = confirm(
           `${headline}\n\n${lines}${more}\n\nGo ahead with the restore? (Nothing has been changed yet. Keep this backup file either way — a newer version of the app may be able to read more of it.)`
         );

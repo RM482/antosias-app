@@ -13,10 +13,11 @@ Round 6 named exactly three things blocking step 1, all now closed:
    let an old backup replace a newer photo or recording. Decided in C-P10a: the
    backup still wins, but a conflict report names anything live that it would
    replace.
-3. **The atomic shadow/digest write was circular** — remove and rename can only
-   learn which variant becomes the shadow *inside* the transaction, but hashing
-   had to happen before it. Solved by giving each variant a precomputed `sha256`
-   at add time (C-A2).
+3. **The atomic shadow/digest write was circular.** Rounds 6-9 patched this four
+   times (digest, CAS, optimistic retry, additive normalisation) and round 9
+   broke it again. Resolved by deleting the design instead: the legacy key **is**
+   variant one rather than a copy of it, so two code generations never write the
+   same value and the whole race disappears (C-A1).
 
 Judgement calls made rather than deferred, across rounds 4–6: **playback-only**
 stale-client compatibility (C-A1), **refuse** same-language matches in the Inbox
@@ -301,32 +302,27 @@ Required behaviour:
 
 | Key | Merge rule |
 |---|---|
-| `phrase-v2-*` | **Union by variant id; the current value wins on conflicting ids.** |
-| `phrase-*` (legacy key) | **Never restored as data.** It is derived — see below. |
+| `phrase-<name>` (variant one) | Restore only when the phone has **no** clip in that slot. An existing recording is never replaced by a backup's — see below. |
+| `phrase-extra-<name>` | **Union by variant id; the current value wins on conflicting ids.** |
 | `stickers` | Union by identity, never replace. |
 | `settings` | Explicit fields only; never `lastBackupAt` or a verification receipt. |
 | `twinAudit` | Invalidated by every restore; never replace a current ready audit with an older "ready" one. |
 | intake ledger | Current item wins; never resurrect an item whose allocated word ids already exist; recompute the header from surviving items. |
 
-**The legacy phrase key is derived, never merged (round 4).** Treating the bare
-Blob and the `phrase-v2-*` array as two independent records lets a restore
-duplicate a clip, or resurrect one she deleted, because the shadow of an old
-backup would come back alongside the current array. The rules:
+**Why variant one is never overwritten by a restore.** It is a bare Blob with no
+id, so there is no way to tell "the same clip, restored" from "a different clip
+recorded since". Overwriting would silently destroy the newer recording;
+skipping, at worst, leaves her with the clip she already has and the backup's
+copy unused. It is reported like any other conflict (C-P10a), so she can hear
+both and decide. Restoring into an **empty** slot is unambiguous and always
+happens — which is the wipe-recovery case that matters.
 
-- A restore **ignores** any legacy `phrase-*` value when the payload also carries
-  the matching `phrase-v2-*` array.
-- From a **v4 legacy-only file** — a v4 backup written before Feature A shipped,
-  so it carries `meta` with the legacy key but no array — the bare Blob is
-  imported as **one variant**, then merged by the union rule above. (v4 defines
-  the first format carrying `meta` at all, so a v3 file cannot contain a phrase
-  key; v4's "v3-era file" wording was wrong.)
-- **The derived id is `pv:legacy:<name>:<sha256(mimeType + "\n" + bytes)>`.** It must
-  be content-derived, not random, or importing the same old backup twice would
-  produce two copies of one clip.
-- After every merge, the legacy shadow **and its digest** are regenerated from the
-  resulting array inside the same transaction (C-A1/C-A2); they are outputs, never
-  inputs. The digest is **regenerated on import, never exported** — a digest
-  travelling in a file would describe a shadow the receiving device does not have.
+Variants two onward carry ids, so they merge cleanly by union.
+
+**C-P12a — importing the same file twice must not duplicate a clip.** Extra
+variants have stable ids, so union handles it. For a **v4 legacy-only file** (a
+backup written before Feature A shipped, carrying only the bare legacy key) there
+is no id, which is exactly why such a file only ever lands in an empty slot.
 
 **C-P13 — referential validation of the complete proposed post-merge set.**
 Promoted from "deferred" (v3 §4.4) because a *verified* backup is about to gate a
@@ -393,24 +389,43 @@ network is unavailable (`sw.js:19`, `:28`), so a v43 client can return at any ti
 — and once an array is written to the old key, that client returns the array and
 `decodeBlob` calls `.arrayBuffer()` on it (`js/media.js:221`) and throws.
 
-**C-A1 — variants live under new keys; legacy keys stay as a playable shadow.**
-New code reads `phrase-v2-<name>` and prefers it. The legacy key keeps **one plain
-Blob** (the first variant) so a cached or rolled-back v43 client still plays a
-valid clip. Both keys are written in the same transaction (C-A2). Two completions
-from round 3:
+**C-A1 — the legacy key IS variant one. There is no shadow, and no copy.**
 
-- **Removing the last variant deletes the legacy key in the same transaction**
-  while the v2 key becomes an empty array — otherwise the shadow would keep
-  playing a clip she deleted.
-- **A stale v43 client can also *write* the legacy key** (round 4 required this be
-  decided, not left open, since it concerns irreplaceable audio). **Decision: the
-  guarantee is playback-only.** New code stores a digest of the shadow it wrote; on
-  read, a legacy value that no longer matches means an old client recorded
-  something, and the app **tells the parent that take was made by an out-of-date
-  version and offers to import it as a variant** rather than silently discarding or
-  silently preferring it. Recording on a stale client stays formally unsupported —
-  the app already requires a force-quit and reopen after every deploy — but a take
-  that does happen is surfaced, never lost without a word.
+Rounds 4 through 9 each patched a "shadow" design in which the legacy key held a
+*duplicate* of the first variant: a digest to detect tampering, then a CAS check,
+then an optimistic retry, then additive normalisation. Round 9 broke the fourth
+version too — stale detection has to hash outside a transaction, so a take
+written after detection but before the write is still overwritten. Four failed
+patches is the design telling us it is wrong: **any scheme where two code
+generations write the same key can lose a write.**
+
+So the duplicate is removed:
+
+| Key | Holds | Written by |
+|---|---|---|
+| `phrase-<name>` (existing) | **Variant one, as a plain Blob** — exactly today's format | both generations |
+| `phrase-extra-<name>` (new) | Variants two onward, plus labels | new code only |
+
+`getStandardPhrases` reads both and concatenates. Consequences, all good:
+
+- **A cached v43 client reads the legacy key and gets a real, playable Blob** —
+  not a copy that could drift, the actual first variant. Nothing to keep in sync.
+- **If a stale client records over it, that take simply becomes variant one** and
+  new code reads it directly. Nothing to detect, nothing to surface, nothing to
+  lose. The entire C-A1 detection machinery, the digest, and the CAS protocol are
+  **deleted**, along with C-A2a's normalisation problem — there is no
+  normalisation, because the legacy format *is* the format.
+- **Deleting variant one** promotes another variant's blob into that key (one
+  write, no hashing); deleting the last one removes the key, which is already
+  today's "nothing recorded" state.
+- **No `sha256` is needed** for any of this. It remains only in §1.4, for making
+  a repeated *import of the same file* idempotent, where the bytes are in hand
+  outside any transaction and hashing is free.
+
+Cost: variant one's label lives in `phrase-extra-<name>` (a small
+`{ labels: { 1: "Klik op de…" } }` map) rather than beside its blob, because the
+legacy key must stay a bare Blob. That is the whole price, and it buys the
+removal of an entire class of race.
 
 ### 2.4 API (`js/db.js`)
 
@@ -421,72 +436,23 @@ removePhraseVariant(language, name, variantId) → removes by id
 renamePhraseVariant(language, name, variantId, label)
 ```
 
-`saveStandardPhrase()` is replaced; its only caller is `js/admin.js:1601`. Legacy
-normalisation on read: a bare Blob becomes `[{ id: 'legacy', blob, label: '' }]`.
+`saveStandardPhrase()` is replaced; its only caller is `js/admin.js:1601`.
 
-**C-A2 — add, remove AND rename each run as ONE readwrite transaction** containing
-the read, the mutation, the v2 write, the legacy-shadow write **and the shadow
-digest write**. A `get` → mutate → `put` across two transactions can silently
-drop a just-recorded clip. No non-IDB `await` inside.
+Read assembles the list from both keys: the legacy Blob becomes variant one
+(`{ id: 'v1', blob, label }`, its label read from `phrase-extra-<name>`), followed
+by the extras in order. A slot with only the legacy key — every slot on her phone
+today — yields exactly one variant, which is what it has always been.
 
-**Each variant carries its own precomputed hash (round 6).** This is what makes
-the above implementable: v5 required hashing the resulting shadow before opening
-the transaction, but remove and rename cannot know which variant will end up
-first until they have read the array *inside* it — a circular requirement.
+**C-A2 — add, remove AND rename each run as ONE readwrite transaction** over
+both keys (`phrase-<name>` and `phrase-extra-<name>`). A `get` → mutate → `put`
+across two transactions can silently drop a just-recorded clip. No non-IDB
+`await` inside — and with C-A1's design there is nothing to hash in there, so
+that constraint is trivially satisfiable rather than circular.
 
-So the variant record becomes:
-
-```js
-{ id, blob, label, createdAt, sha256 }   // sha256 of MIME type + bytes
-```
-
-The hash is computed **once, at add time**, outside any transaction, when the
-bytes are already in hand. Remove and rename then need no hashing at all: the
-shadow digest is simply the surviving first variant's stored `sha256`. Restore
-merging works the same way, since imported variants arrive with their hashes.
-
-**C-A2a — normalising the existing legacy Blob.** Every phone today stores a bare
-Blob with no hash, and §2.4's legacy read produces a variant with no hash either.
-If that unhashed variant is still first when a mutation runs, the circular
-requirement returns.
-
-Round 7 proposed hashing outside and re-checking `blob.size` + `blob.type` inside
-the transaction. **Round 8 rejected that, correctly:** size and type are not byte
-identity, so a same-sized stale take would pass the check and be overwritten; and
-blindly retrying the mutation is worse still, because "remove the legacy variant"
-would then be applied to a *different* take that also normalises to the synthetic
-`legacy` id — destroying the very recording C-A1 promises to surface.
-
-**The requirement is removed rather than satisfied.** Two observations:
-
-1. **The variant id does not need to be content-derived here.** Content
-   derivation exists only to make repeated *imports of the same file* idempotent
-   (§1.4). In-place normalisation has exactly one blob in one slot, so a fixed
-   `pv:legacy:<name>` is unique and sufficient. Import keeps its content-derived
-   id, and hashes outside a transaction where that is free.
-2. **Normalisation does not need to write the legacy key at all.** For a
-   single-variant slot the shadow *is* that same blob. So normalisation is purely
-   **additive**: create the `phrase-v2-*` array from the blob **read inside the
-   transaction**, and leave the legacy key untouched.
-
-That makes normalisation atomic, hash-free and incapable of losing bytes — it
-writes back exactly what it just read, in the same transaction, and touches
-nothing else. `sha256` starts `null` and is filled in later (on the next add,
-which hashes anyway, or lazily on read).
-
-Stale-client detection is unaffected and still async-safe: on **read** — outside
-any transaction — hash the current legacy blob and compare it to the stored
-shadow digest. A mismatch means an out-of-date client recorded something, and
-C-A1's "tell the parent, offer to import it as a variant" path runs. **Mutations
-on that slot are blocked until she resolves it**, so no retry loop can ever apply
-a stale mutation to a take it was not aimed at.
-
-A slot she never touches is never normalised and keeps working through the legacy
-read, indefinitely.
-
-The derived id for a legacy import (§1.4) uses that same digest, framed
-unambiguously as `sha256(mimeType + "\n" + bytes)` — length framing matters, or a
-type/bytes boundary could be ambiguous.
+**C-A2a — there is no normalisation step.** Every phone already stores exactly
+what variant one is meant to be: a bare Blob under the legacy key. Nothing is
+migrated, rewritten or hashed on upgrade; adding a second variant simply creates
+`phrase-extra-<name>` alongside it. A slot she never touches is never written.
 
 **C-A3 — every call site of the old flat shape is updated in the same change** —
 `js/session.js:140`, `js/admin.js:1371`.
@@ -962,14 +928,16 @@ function directly rather than sampling "~20 questions", which makes results flak
   `people` and `recordings` are each rejected, as are duplicate `meta` keys. Round
   5 caught that all five stores use overwrite-by-key `put()` (`js/db.js:103`), so
   testing words alone would leave four silent-overwrite paths unproven.
-- **Backup, legacy-shadow handling:** importing the **same v4 legacy-only file
-  twice** yields one variant, not two (the derived id is content-based); a payload
-  carrying both a legacy key and a `phrase-v2-*` array ignores the legacy key; a
-  deleted variant is not resurrected by an older backup's shadow (C-P12).
+- **Backup, phrase merge:** a backup never overwrites an existing variant one
+  (the newer recording survives, and the conflict is reported); it does restore
+  into an empty slot; extra variants union by id, so importing the same file
+  twice yields no duplicates; a deleted extra variant is not resurrected
+  (C-P12/C-P12a).
 - **Feature A:** a legacy bare Blob still plays; a stale v43 reader still finds a
-  playable Blob on the legacy key after variants exist; deleting the last variant
-  removes the shadow; a legacy value changed by an out-of-date client is **surfaced
-  to the parent**, not silently dropped (C-A1); long praise is **not truncated** and
+  playable Blob on the legacy key after extra variants exist (C-A1); a clip
+  recorded by an out-of-date client over that key is simply read back as variant
+  one, with nothing lost; deleting variant one promotes another into its place,
+  and deleting the last removes the key; long praise is **not truncated** and
   "Hear it again" cannot cancel it (C-A6); an empty take and an interrupted take are
   both rejected (C-A8/C-A9).
 - **Photo Inbox:** atomic photo+ledger enqueue; killed mid-transaction leaves
@@ -1015,8 +983,7 @@ during a take, and resume UX after a force-quit.
   confirmation of the three live v42 defects. Folded in: the `(formatVersion,
   payloadKind)` matrix and old-format derivation algorithm (§1.3 and
   `TWIN_LINK_PLAN.md` §9), C-P8 (single-transaction snapshot), C-P9 (measured
-  ceiling; chunking explicitly unspecified), C-P12 (legacy shadow is derived,
-  never merged), C-P15 (duplicate id/key rejection), C-A1 (playback-only, with
+  ceiling; chunking explicitly unspecified), C-P12 (phrase merge rules), C-P15 (duplicate id/key rejection), C-A1 (playback-only, with
   stale takes surfaced), C-B1 (ledger carries language and per-language audio),
   C-B20 (Inbox refuses same-language matches), §5 (no rework percentage;
   dependency-ordered steps instead of fixed version labels; step 2 split into two

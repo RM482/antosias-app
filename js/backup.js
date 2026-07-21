@@ -248,7 +248,10 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
         index: worse.index,
         kind: 'duplicate',
         identity: rowIdentity(store, worse.row, worse.index),
-        reason: 'a second copy of this same entry in the file; the more complete copy was used',
+        reason:
+          usableCount(better.row) > usableCount(worse.row)
+            ? 'a second copy of this same entry in the file; the copy with more of its media was used'
+            : 'a second copy of this same entry in the file; the first one was used',
       });
     }
 
@@ -269,6 +272,7 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
       omitted.push({
         store,
         index,
+        id: row.id,
         field: broken.join(', '),
         kind: live ? 'skipped' : 'repaired',
         identity: rowIdentity(store, row, index),
@@ -357,11 +361,15 @@ export async function applyImportPayload(analysis) {
     }))
   );
 
-  await putAllTransactional(
+  const { skipped: guardedSkips = [] } = await putAllTransactional(
     { categories, words, photos, people, recordings },
     'restoring data',
     { skipIfPresent: analysis.guardedIds || {} }
   );
+  // A repaired row whose record appeared between analysis and the write was
+  // correctly left alone — so it was not repaired, it was skipped. Reporting it
+  // as "came back without its recording" would be false.
+  const lateSkips = new Set(guardedSkips.map((k) => `${k.store}:${k.id}`));
   return {
     categories: categories.length,
     words: words.length,
@@ -372,8 +380,13 @@ export async function applyImportPayload(analysis) {
     // Only rows that were genuinely NOT written count as skipped. A repaired
     // row (restored without its damaged clip) and a duplicate that lost to a
     // more complete copy are reported, but they are not losses of an entry.
-    skipped: analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length,
-    repaired: analysis.omitted.filter((o) => o.kind === 'repaired').length,
+    skipped:
+      analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length +
+      lateSkips.size,
+    repaired: analysis.omitted.filter(
+      (o) => o.kind === 'repaired' && !lateSkips.has(`${o.store}:${o.id}`)
+    ).length,
+    lateSkipped: guardedSkips,
   };
 }
 

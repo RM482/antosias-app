@@ -111,6 +111,9 @@ export async function putAllTransactional(writes, context = 'restoring data', { 
   const db = await openDB();
   const storeNames = Object.keys(writes);
   const t = db.transaction(storeNames, 'readwrite');
+  // Guarded records that turned out to be present after all, so the caller can
+  // report accurately instead of claiming it wrote them.
+  const skipped = [];
   for (const storeName of storeNames) {
     const store = t.objectStore(storeName);
     const guarded = skipIfPresent[storeName];
@@ -120,6 +123,7 @@ export async function putAllTransactional(writes, context = 'restoring data', { 
         const req = store.get(record.id);
         req.onsuccess = () => {
           if (req.result === undefined) store.put(record);
+          else skipped.push({ store: storeName, id: record.id });
         };
         continue;
       }
@@ -127,7 +131,7 @@ export async function putAllTransactional(writes, context = 'restoring data', { 
     }
   }
   return new Promise((resolve, reject) => {
-    t.oncomplete = () => resolve();
+    t.oncomplete = () => resolve({ skipped });
     t.onerror = () => reject(storageError(t.error, context));
     t.onabort = () => reject(storageError(t.error, `${context} (transaction aborted, possibly out of storage space)`));
   });
