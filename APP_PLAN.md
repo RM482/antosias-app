@@ -1,62 +1,86 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 14 July 2026, end of session) — live app `?v=42`
+## Status (as of 21 July 2026, end of session) — live app `?v=44`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
 
-**⏸️ ONE WORKSTREAM IS PAUSED MID-FLIGHT — read `TWIN_LINK_PLAN.md` (v3) and
-"PAUSED: translation linking" below before doing anything else.** Release 1 of it
-shipped (v42, non-destructive); Release 2 (the data migration) is designed,
-vetted twice, and **not built** — it is waiting on one final Codex review.
+**⏭️ NEXT SESSION — start step 1 of `VARIETY_AND_INTAKE_PLAN.md`**: the backup
+and restore hardening. It is the only step signed off to build (13 Codex review
+rounds; round 13 said "safe to start — yes" and listed what the first commit
+should contain). Everything else in that plan is specified but NOT signed off.
 
-Everything else outstanding is ON-PHONE TESTING (§ below).
+**⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
+Three defects in its already-shipped v42 code were found and fixed in v44, which
+means the plan itself needs re-vetting before Release 2 is built. It also now
+takes DB **v5** (Feature A took v4). Do not build it next.
 
 Shipped newest first:
 
 | v | What |
 |---|---|
-| v42 | **Translation linking, Release 1 (non-destructive).** New `js/concepts.js`: the twin-pairing rules, deliberately PURE + SYNCHRONOUS so Release 2 can run them inside a `versionchange` transaction. `SEED_DATA` gains a shared `key` per concept (banaan/banan = 'banana'). New Settings → "🔗 Translation linking": backup gate, the intact starter set proposed as ONE batch confirmation, ambiguous photo groups resolved by the parent (default: leave separate). Decisions stored under `meta` key `twinAudit` with a dataset signature. Writes NO word records. |
-| v41 | Four fixes from a code review, 3 of them v40 regressions: category delete could destroy an **unrelated** same-named category and all its words (name-match no longer authorises anything destructive — only a reciprocal link or a seed pair does); the translation wizard could silently fail to link a twin (now an in-app "same thing?" conflict screen); the parent gate only half-filled (JS 1.5s vs CSS 3s); the end-screen Done button trapped the parent on a save failure (now disables while saving, reports the error, offers Retry / exit-without-saving; observations save in ONE transaction). |
-| v40 | Six real-use fixes: session word order shuffled (no longer always the same first word); choice photos show whole (object-fit: contain, uncropped); parent hold-to-exit 3s→1.5s; ⭐ Stickers manager in Settings (remove one / reset all); Dutch↔Polish category pairs mirror (add/delete/emoji-change propagate; delete removes the twin + its words; names stay per-language); "➕ Add missing translations" wizard on the flag (type the twin word + de/het, reuses the photo, then surfaces in that language's "Record missing audio") |
-| v39 | iOS mic fix: a muted/interrupted capture stream (notification, Siri, call) is dropped and re-acquired instead of reused — stops silent-empty recordings after an interruption |
-| v38 | Real-use fixes: pictures ~50% bigger (2 choices now stack vertically; 3 = 2+1 grid, 4 = 2×2), interim real-world-prompt screen REMOVED (correct tap → next word, both modes), ⭐ Sticker book screen (home button, parent-gate exit), end-screen sticker/text overlap fixed |
-| v37 | TEST MODE (see TEST_MODE_PLAN.md): "🎯 Start a test" per category + persistent 2/3/4 difficulty picker; skips the listen stage — audio asks immediately; first tap scored; end screen shows "7/10 right on the first try" + ✓/✗ per word, pre-toggles "Understood" on first-try-correct |
-| v36 | Child-mode flow reorder: host intro before the category tiles |
-| v35 | Multiple photos per word, rotated per appearance |
-| v34 | Rewards: confetti on correct taps, collectible session stickers |
-| v33 | Quick-record wizard + Dutch article/een controls in the Polish editor |
+| v44 | **Four live data-safety fixes**, found by Codex while planning other work. (1) **Restore lost data silently** — malformed photos/people/recordings were dropped and only categories+words were even counted, so a damaged recording vanished from an apparently successful restore. `importPayload` is split into `analyzeImportPayload` (pure, write-free) + `applyImportPayload`; the restore screen itemises every problem by name and asks first; declining writes nothing; `importPayload` refuses by default, covering the Gist path. Also: duplicate ids in a file no longer silently overwrite each other, damaged media inside a valid row is reported rather than blanked away, and a repaired row never overwrites a record that appeared since (re-checked *inside* the write transaction). (2) The **twin audit could put one word in two pairs** (would have made the migration abort). (3) **Unrecognised languages were silently read as Dutch** — now reported, and saving is blocked. (4) The **seed cohort never checked its seed marker**. Saved audits are `auditVersion: 2`; v1 records are set aside. Plus `openDB` gained `onblocked`/`onversionchange` handling and stopped caching a failed open forever. |
+| v43 | **Child-mode flow reorder** (19 July, parent request): flag → collage of ALL that language's speakers + language intro → category tiles → (conditional) face pick → session. The collage moved from the end to the beginning; tiles now come before the voice pick, so voices are filtered to people who recorded *that category*. Default voice goes straight to the session; a family voice still gets its own intro. |
+| v42 | **Translation linking, Release 1 (non-destructive).** New `js/concepts.js`: the twin-pairing rules, deliberately PURE + SYNCHRONOUS so Release 2 can run them inside a `versionchange` transaction. `SEED_DATA` gains a shared `key` per concept (banaan/banan = 'banana'). New Settings → "🔗 Translation linking". Decisions stored under `meta` key `twinAudit`. Writes NO word records. |
+| v41 | Four fixes from a code review, 3 of them v40 regressions: category delete could destroy an **unrelated** same-named category and all its words; the translation wizard could silently fail to link a twin (now a "same thing?" conflict screen); the parent gate only half-filled; the end-screen Done button trapped the parent on a save failure. |
+| v40 | Six real-use fixes: session word order shuffled; choice photos show whole; parent hold-to-exit 3s→1.5s; ⭐ Stickers manager in Settings; Dutch↔Polish category pairs mirror; "➕ Add missing translations" wizard on the flag. |
+| v39 | iOS mic fix: a muted/interrupted capture stream is dropped and re-acquired instead of reused. |
+| v38 | Pictures ~50% bigger, interim real-world-prompt screen REMOVED, ⭐ Sticker book screen, end-screen overlap fixed. |
+| v37 | TEST MODE (`TEST_MODE_PLAN.md`): "🎯 Start a test" per category, 2/3/4 difficulty, first tap scored. |
+| v36 | Child-mode flow reorder: host intro before the category tiles (superseded by v43). |
+| v35 | Multiple photos per word, rotated per appearance. |
+| v34 | Rewards: confetti on correct taps, collectible session stickers. |
+| v33 | Quick-record wizard + Dutch article/een controls in the Polish editor. |
+
+### The one thing to understand before touching backups
+
+**The `meta` store has never been included in a backup.** `buildExportPayload`
+exports five stores (`js/backup.js`); `meta` is not one of them. That store holds
+her **recorded game phrases** ("Klik op de…", "Goed zo!"), **Antosia's stickers**,
+settings, and the twin audit. A merge-restore onto a working phone doesn't delete
+them, but a wipe, reinstall or lost phone loses them permanently — and "take a
+fresh backup first" is the safety ritual the whole translation migration rests on.
+Fixing this is step 1.
+
+**Also**: "💾 Save backup" and "📤 Share with family" currently build the *same
+payload* (`js/admin.js:376`), and the share file goes to a public-if-you-have-the-
+link Gist. So anything added to the export before step 1 splits them would be
+published. This nearly happened — it was caught in review, not in testing.
 
 Notes for the next session:
-- ✅ Confirmed on the phone this session: **Polish audio works** (record + play —
-  the earlier report was a phone-side hiccup, not code) and the Dutch category
-  names. Everything else below is still untested on the real iPhone.
+- ✅ Confirmed on the phone previously: **Polish audio works** (record + play) and
+  the Dutch category names. Everything from v37 onward is still untested on the
+  real iPhone (§ checklist below).
 - `word.realWorldPrompt` still exists on records and in the editor but no longer
-  appears mid-session (v38 cut that screen); the end-screen reminder is the
-  only real-world nudge now.
-- v40 was driven from a round of the parent's own on-phone notes. Verified
-  locally (headless Chromium, zero console errors): category add + emoji-sync +
-  two-way linking, sticker remove + reset, and the translation wizard creating
-  a photo-linked twin in the paired category. NOT reproducible locally (the
-  seed has no recorded audio, so no session starts): the shuffled word order
-  and whole-photo look in a real session, the 1.5s hold feel, and the Dutch
-  de/het picker when adding a Dutch translation from the Polish flag — check
-  those on-phone (§0a below).
-- No feature work is queued. Next candidates come from on-phone testing
-  feedback. **Local verification recipe:** `.claude/skills/verify/SKILL.md`
-  (static server + headless Chromium; on this Mac stub `getUserMedia` with an
-  oscillator MediaStreamDestination — the fake-device flag doesn't work; see
-  the 11 July scratchpad scripts pattern described there). For DB-shaped
-  checks (categories, stickers, twins) you can also drive the app in the
-  Browser pane and read/patch IndexedDB directly with `javascript_tool` — how
-  v40 was verified without any recorded audio.
+  appears mid-session (v38 cut that screen).
+- **Codex CLI runs locally** — `/Applications/ChatGPT.app/Contents/Resources/codex`,
+  authenticated, `gpt-5.6-sol`. Use
+  `codex exec --skip-git-repo-check --model gpt-5.6-sol -c model_reasoning_effort=high < promptfile`.
+  It is read-only in the working directory, so it reads the real source — the old
+  "copy the project into Codex's workspace first" blocker no longer applies.
+- **Local verification recipe:** `.claude/skills/verify/SKILL.md`. Two gotchas
+  learned this session: Settings is the `⚙️` button (not text), and you can drive
+  the real modules from a page on the served origin with
+  `page.evaluate(() => import('/js/concepts.js?v=44'))` — that is how the 70
+  assertions behind v44 run without any UI at all.
+- **A lesson worth keeping.** Review rounds 6–10 kept finding the same class of
+  problem because a constraint I had invented (no database version bump for the
+  phrase feature) forced old and new code to share storage keys. Five designs to
+  make that safe all failed. Asking the reviewer *"is this converging or
+  circling?"* got the answer "circling", and changing the constraint dissolved the
+  class in one move. When the same shape of bug keeps coming back, suspect the
+  constraint, not the patch.
 
 ---
 
 ## ⏸️ PAUSED: translation linking (resume here)
 
-**Paused 14 July 2026 at the parent's request. Spec: `TWIN_LINK_PLAN.md` (v3,
-build-ready).**
+**Paused 14 July 2026 at the parent's request. Spec: `TWIN_LINK_PLAN.md` — now
+v3.1 and explicitly NOT build-ready:** three defects in its shipped v42 code were
+found and fixed in v44 (see above), so the plan needs re-vetting, and it now takes
+IndexedDB **v5** because Feature A claimed v4. Read
+`VARIETY_AND_INTAKE_PLAN.md` §5 for where it sits in the queue — it is step 5 of
+6, not the next thing to build.
 
 ### The problem being fixed
 
@@ -132,6 +156,32 @@ one word per language per concept. `photoId` stays a picture, not identity.
 it picks up v42. (Home Screen icon only; never delete it, never clear Safari
 data.) Take a **fresh backup first** (Settings → 💾 Save backup) — it includes
 people and recordings now.
+
+### 0e. v44 — the restore safety fixes (untested on phone)
+You cannot easily *cause* a damaged backup by hand, so the useful phone checks are
+that the ordinary paths still behave:
+- **Settings → ♻️ Restore from backup** with a good file: the confirmation now
+  spells out that photos, recordings and people are replaced too, not just words.
+  Restoring a healthy backup should report no problems and change nothing
+  unexpected. ⚠️ Only restore a backup you are willing to have applied — restoring
+  brings back things you deleted after that backup was made. That is intended.
+- **Settings → 🔗 Translation linking**: if you saved answers there before today,
+  the app now says they have been **set aside** and asks you to go through it
+  once more. That is expected — the version that produced them could get pairs
+  wrong. Nothing was changed to your words.
+- While you are in there, check whether it reports **"words with a language this
+  app doesn't recognise"**. On a healthy database it should say nothing. If it
+  DOES appear, don't try to fix it in the editor — report it, because the words
+  it names need a repair control that does not exist yet.
+
+### 0d. v43 — the new child-mode order (untested on phone)
+Tap ▶ Play and check the new sequence:
+flag → **a collage of everyone who speaks that language** (with the language name
+playing: "Nederlands!") → **category tiles** → *then* the face pick, and only if
+more than one person recorded **that particular category** → session.
+The collage moved from the end to the beginning, so she meets the speakers first
+and picks what to learn second. If only your own voice exists for a category, it
+should go straight from the tile into the session with no face pick at all.
 
 ### 0c. v42 — translation linking, Release 1 (untested on phone)
 Settings → **🔗 Translation linking**. It changes nothing; it only asks. Expect:
