@@ -438,7 +438,7 @@ async function renderCategories() {
     if (!file) return;
     if (
       !confirm(
-        'Restore from this backup? Words in the file will be added, and any word with the same id will be overwritten by the backup version. Your other words are left as they are.'
+        'Restore from this backup?\n\nAnything in the file is added — and anything already on this phone that the backup also contains is REPLACED by the backup’s version. That includes photos, voice recordings and people, not just words. So a newer photo or recording made since this backup will be overwritten by the older one.\n\nEverything the backup does not mention is left exactly as it is.'
       )
     )
       return;
@@ -1521,7 +1521,9 @@ async function renderSettings() {
   // Decisions made by the OLD planner can't be trusted: it didn't check the
   // seed marker, could put one word in two pairs, and silently read an
   // unrecognised language as Dutch. They have to be made again.
-  const auditStale = !!(audit && audit.ready && (audit.auditVersion ?? 1) < 2);
+  // Fails CLOSED: only the exact version this build understands is usable. A
+  // `< 2` test would treat an unknown or future version as fine.
+  const auditStale = !!(audit && audit.ready && audit.auditVersion !== 2);
   const auditUsable = !!(audit && audit.ready && !auditStale);
   if (auditUsable) {
     linkChildren.push(

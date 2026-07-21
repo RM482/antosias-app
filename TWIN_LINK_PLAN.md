@@ -384,7 +384,8 @@ Confirmed **not** affected (do not change):
   v1, v2, legacy kind-less v3, `3+share`, `4+backup`, `5+backup`, `5+share`; and
   refusal of `4+share`, v5 with missing/unknown kind, a share carrying `meta`, and
   an unknown version.
-- Backup, restore edge cases: duplicate word ids **and** duplicate `meta` keys within
+- Backup, restore edge cases: duplicate ids within **each of `categories`, `words`,
+  `photos`, `people` and `recordings`**, and duplicate `meta` keys, within
   one payload are rejected; overwriting by identical id **preserves** an existing
   `conceptId`; a restored `twinAudit` is inert as evidence; a genuine collision
   performs **zero** writes and reaches the conflict screen.

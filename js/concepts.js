@@ -57,9 +57,12 @@ export function otherLanguage(lang) {
 export function findTwin(words, word) {
   if (!word || !word.conceptId) return null;
   const lang = wordLanguage(word);
-  return (
-    words.find((w) => w.id !== word.id && w.conceptId === word.conceptId && wordLanguage(w) !== lang) || null
-  );
+  if (lang === null) return null; // unreadable language: it is nobody's twin
+  // The twin must be the EXACT opposite supported language. Testing `!== lang`
+  // would match a word whose language is null (unsupported), since null is
+  // never equal to 'nl' — so a broken record could be served up as a twin.
+  const want = otherLanguage(lang);
+  return words.find((w) => w.id !== word.id && w.conceptId === word.conceptId && wordLanguage(w) === want) || null;
 }
 
 // --- Rule A: photo groups ----------------------------------------------------
@@ -87,7 +90,11 @@ export function classifyPhotoGroups(words) {
   for (const [photoId, group] of photoGroups(words)) {
     const nl = group.filter((w) => wordLanguage(w) === 'nl');
     const pl = group.filter((w) => wordLanguage(w) === 'pl');
-    if (nl.length === 1 && pl.length === 1) {
+    // A member whose language can't be read makes the whole group undecidable:
+    // ignoring it would let {nl, pl, de} look like a clean 1-and-1 pair when a
+    // third word is in fact sharing that picture.
+    const unreadable = group.filter((w) => wordLanguage(w) === null);
+    if (nl.length === 1 && pl.length === 1 && unreadable.length === 0) {
       pairs.push({ photoId, nl: nl[0], pl: pl[0] });
     } else if (group.length > 1) {
       ambiguous.push({ photoId, words: group, nl, pl });
@@ -138,9 +145,14 @@ export function detectSeedCohort(words, { markers = {}, categories = [] } = {}) 
       : [seedCategoryId];
 
   const categoryIds = new Set(categories.map((c) => c.id));
+  // Only aliases that ACTUALLY EXIST count. Otherwise category presence could
+  // be satisfied by `nl-cat-x` while a word points at a `cat-x` that is not in
+  // the database at all — evidence from one generation vouching for the other.
+  const presentAliases = (lang, seedCategoryId) =>
+    categoryAliases(lang, seedCategoryId).filter((id) => categoryIds.has(id));
   const categoriesPresent = (lang) =>
-    ((SEED_DATA[lang] && SEED_DATA[lang].categories) || []).every((c) =>
-      categoryAliases(lang, c.id).some((id) => categoryIds.has(id))
+    ((SEED_DATA[lang] && SEED_DATA[lang].categories) || []).every(
+      (c) => presentAliases(lang, c.id).length > 0
     );
   if (!categoriesPresent('nl') || !categoriesPresent('pl')) {
     return { intact: false, reason: 'missing-seed-category', pairs: [] };
@@ -150,7 +162,7 @@ export function detectSeedCohort(words, { markers = {}, categories = [] } = {}) 
     const entries = (SEED_DATA[lang] && SEED_DATA[lang].words) || [];
     const byKey = new Map();
     for (const entry of entries) {
-      const allowed = categoryAliases(lang, entry.categoryId);
+      const allowed = presentAliases(lang, entry.categoryId);
       const hits = words.filter(
         (w) =>
           wordLanguage(w) === lang &&

@@ -1,15 +1,29 @@
-# Plan v5: phrase variety + photo-first intake
+# Plan v6: phrase variety + photo-first intake
 
-Status: **four Codex review rounds done; round 4's seven must-fixes are folded in
-below. The fold-in itself has not been re-reviewed.** Nothing is built yet.
+Status: **six Codex review rounds done. Round 6's three step-1 blockers are
+resolved below.** The features here are not built; the four live defects found
+along the way ARE fixed and shipped (v44) — see §4.0.
 
-Round 4's verdict was *not build-ready* with seven remaining must-fixes — all
-specification gaps ("decide this and write it down"), not newly discovered flaws.
-Each is now resolved in place and marked "(round 4)". The judgement calls I made
-rather than deferred: **playback-only** stale-client compatibility (C-A1),
-**refuse** same-language matches in the Inbox rather than adopt (C-B20),
-**single-file** backup with a measured ceiling and chunking explicitly unspecified
-(C-P9), and **no rework percentage** claimed for the Inbox split (§5).
+Round 6 named exactly three things blocking step 1, all now closed:
+
+1. **The canonical digest was not canonical** — no fixed store order, "sorted by
+   `id`" was wrong for `meta` (which is keyed on `key`), and absent-vs-null was
+   left open. Pinned down in §1.2 C-P8.
+2. **Same-id overwrite had no explicit safety decision** — "merge by id" silently
+   let an old backup replace a newer photo or recording. Decided in C-P10a: the
+   backup still wins, but a conflict report names anything live that it would
+   replace.
+3. **The atomic shadow/digest write was circular** — remove and rename can only
+   learn which variant becomes the shadow *inside* the transaction, but hashing
+   had to happen before it. Solved by giving each variant a precomputed `sha256`
+   at add time (C-A2).
+
+Judgement calls made rather than deferred, across rounds 4–6: **playback-only**
+stale-client compatibility (C-A1), **refuse** same-language matches in the Inbox
+rather than adopt (C-B20), **single-file** backup with a measured ceiling and
+chunking explicitly unspecified (C-P9), **backup-wins-but-never-silently** for
+same-id conflicts (C-P10a), and **no rework percentage** claimed for the Inbox
+split (§5).
 
 Two parent-requested features, plus the outstanding items inherited from the 14
 and 19 July sessions.
@@ -185,15 +199,20 @@ claim is *bounded* peak memory, not *low* peak memory.
 **C-P8 — the canonical digest, defined exactly.** "Canonical" was hand-waving in
 v4. The digest must specify:
 
-- **Ordering:** stores in a fixed listed order; records within a store sorted by
-  `id`; object keys sorted lexicographically; array order preserved as-is (it is
-  meaningful for `extraPhotoIds`).
+- **Ordering, exactly:** stores in this fixed order — `categories`, `words`,
+  `photos`, `people`, `recordings`, `meta`. Records sorted by **that store's own
+  key path**: `id` for the five content stores, **`key` for `meta`** (round 6:
+  "sorted by `id`" was wrong for `meta`, which is keyed on `key`). Object keys
+  sorted lexicographically. Array order preserved as-is — it is meaningful for
+  `extraPhotoIds`.
 - **Coverage:** all non-media scalar data too — a per-Blob manifest alone cannot
   detect a renamed word or a re-pointed category, which is exactly what the
   Release 2 gate must catch.
 - **Per Blob:** SHA-256 of the bytes, plus size and MIME type.
-- **Absent vs null:** normalised to one representation and documented, so a field
-  that is missing on one device and `null` on another does not read as a change.
+- **Absent vs null, decided:** a key whose value is `null` or `undefined` is
+  **omitted entirely** before serialising. So "missing" and "null" collapse to
+  the same digest, and a field the app stopped writing does not read as a change.
+  Empty string, `0` and `false` are values and are kept.
 - **Excluded:** `lastBackupAt` and any verification receipt (C-P5) — otherwise
   verifying a backup would immediately invalidate its own digest.
 - **Comparison:** an exact canonical tuple comparison, not another 32-bit hash
@@ -253,6 +272,22 @@ a version number changed.
 
 ### 1.4 Restore contracts
 
+**C-P10a — same-id overwrite is a decision, not a default (round 6).** "Merge by
+id" currently means *the backup silently wins* — including over a photo or a
+recording made since that backup. That is a real destruction path in the recovery
+feature itself, and until v44 the confirmation text mentioned only words.
+
+**Decision: the backup still wins — restoring means "put back what that file
+says" — but nothing that would replace live media may happen unnamed.** Restore
+computes a **conflict report** before writing: records present in both the file
+and the database where the live copy holds media the backup's copy lacks or
+differs from. The parent sees the count and the affected names, exactly like the
+omission report, and confirms. Silence is the thing being removed, not the merge
+semantics.
+
+(v44 already widened the warning text to name photos, recordings and people; the
+itemised conflict report is step 1's work.)
+
 **C-P11 — a malformed blob-bearing record ABORTS the restore.** Any malformed word,
 photo, person, recording or allowlisted `meta` record stops the restore before any
 write. Today photos, people and recordings are silently filtered and not even
@@ -285,7 +320,7 @@ backup would come back alongside the current array. The rules:
   imported as **one variant**, then merged by the union rule above. (v4 defines
   the first format carrying `meta` at all, so a v3 file cannot contain a phrase
   key; v4's "v3-era file" wording was wrong.)
-- **The derived id is `pv:legacy:<name>:<sha256 of MIME type + bytes>`.** It must
+- **The derived id is `pv:legacy:<name>:<sha256(mimeType + "\n" + bytes)>`.** It must
   be content-derived, not random, or importing the same old backup twice would
   produce two copies of one clip.
 - After every merge, the legacy shadow **and its digest** are regenerated from the
@@ -391,11 +426,28 @@ normalisation on read: a bare Blob becomes `[{ id: 'legacy', blob, label: '' }]`
 
 **C-A2 — add, remove AND rename each run as ONE readwrite transaction** containing
 the read, the mutation, the v2 write, the legacy-shadow write **and the shadow
-digest write** (round 5: v4 listed only the two phrase values, so the digest could
-drift out of step with the shadow it describes). A `get` → mutate → `put` across
-two transactions can silently drop a just-recorded clip. No non-IDB `await`
-inside — which means the digest must be computed *before* the transaction opens,
-from the bytes already in hand.
+digest write**. A `get` → mutate → `put` across two transactions can silently
+drop a just-recorded clip. No non-IDB `await` inside.
+
+**Each variant carries its own precomputed hash (round 6).** This is what makes
+the above implementable: v5 required hashing the resulting shadow before opening
+the transaction, but remove and rename cannot know which variant will end up
+first until they have read the array *inside* it — a circular requirement.
+
+So the variant record becomes:
+
+```js
+{ id, blob, label, createdAt, sha256 }   // sha256 of MIME type + bytes
+```
+
+The hash is computed **once, at add time**, outside any transaction, when the
+bytes are already in hand. Remove and rename then need no hashing at all: the
+shadow digest is simply the surviving first variant's stored `sha256`. Restore
+merging works the same way, since imported variants arrive with their hashes.
+
+The derived id for a legacy import (§1.4) uses that same digest, framed
+unambiguously as `sha256(mimeType + "\n" + bytes)` — length framing matters, or a
+type/bytes boundary could be ambiguous.
 
 **C-A3 — every call site of the old flat shape is updated in the same change** —
 `js/session.js:140`, `js/admin.js:1371`.
@@ -683,6 +735,40 @@ return the quota it already fetches from `navigator.storage.estimate()`. The
 ---
 
 ## 4. Outstanding items
+
+### 4.0 SHIPPED in v44 — four live data-safety defects
+
+Found by review rounds 3–6 while planning the above, cleared by round 5 to ship
+ahead of the full programme, and verified in headless Chromium (54 assertions,
+zero console errors):
+
+1. **Restore lost data silently.** Malformed photos, people and recordings were
+   filtered out while `skipped` counted only categories and words. Now
+   `analyzeImportPayload` (pure, write-free) itemises every omission —
+   `{store, index, field?, identity, reason}` — the restore screen lists them and
+   asks before writing, and `importPayload` **refuses by default**, which covers
+   `importFromGist`. Round 6 extended this to **duplicate ids within a payload**
+   (the second copy used to silently replace the first) and to **damaged media
+   inside an otherwise-valid row** (an empty or non-`data:` audio field used to
+   vanish, and non-`data:` strings were being handed to `fetch()`).
+2. **The audit could put one word in two pairs** — `ambiguousIds` was computed
+   after the cohort filter, and `validateManualPair` never enforced its own
+   "already spoken for" rule. Release 2 would have aborted deterministically.
+3. **Unrecognised languages were silently read as Dutch.** `wordLanguage` now
+   returns `null` for an explicit unsupported value; the audit names those words
+   and blocks saving. Round 6 caught that `null` was *not* automatically safe:
+   `findTwin` matched on `!== lang`, so a `de` word became an `nl` word's twin,
+   and `classifyPhotoGroups` called `{nl, pl, de}` a clean pair. Both fixed.
+4. **The seed cohort never checked its seed marker.** It now requires both
+   markers plus a complete category set, matches word text exactly, and accepts
+   legacy Dutch category ids only via one explicit alias that must actually exist.
+
+Saved audits are `auditVersion: 2`; anything else is shown as set aside and must
+be re-made. The check fails **closed** (`!== 2`, not `< 2`).
+
+**Still owed on this thread:** a v2 audit is not yet re-validated against the
+dataset signature, so it can still be *displayed* as current after words change
+(§4.1). That is Release 2's gate, not v44's.
 
 ### 4.1 Translation linking, Release 2 — plus three defects in shipped v42 code
 

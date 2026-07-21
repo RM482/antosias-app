@@ -176,25 +176,69 @@ function rowIdentity(store, row, index) {
 //
 // Pure and synchronous: no decoding, no database access. Returns the usable
 // rows plus an itemised list of everything omitted and why.
+// Media travels as a base64 `data:` URL. Anything else — an empty string, a
+// stray "null", an http URL — is damaged, and must never reach `fetch()`.
+const isUsableMedia = (v) => typeof v === 'string' && v.startsWith('data:') && v.length > 'data:'.length;
+
 export function analyzeImportPayload(payload) {
   assertStructurallyValid(payload);
   const omitted = [];
 
-  const keep = (store, rows, isUsable, reason) =>
-    (rows || []).filter((row, index) => {
-      if (isUsable(row)) return true;
-      omitted.push({ store, index, identity: rowIdentity(store, row, index), reason });
-      return false;
+  const keep = (store, rows, isUsable, reason) => {
+    const seenIds = new Set();
+    return (rows || []).filter((row, index) => {
+      if (!isUsable(row)) {
+        omitted.push({ store, index, identity: rowIdentity(store, row, index), reason });
+        return false;
+      }
+      // Two rows with one id: the transaction would put() both and the second
+      // would silently replace the first, while the summary counted two.
+      // Keep the first, report the rest — the file itself is contradictory and
+      // there is no basis for preferring the later copy.
+      if (seenIds.has(row.id)) {
+        omitted.push({
+          store,
+          index,
+          identity: rowIdentity(store, row, index),
+          reason: 'a second copy of this same id in the file',
+        });
+        return false;
+      }
+      seenIds.add(row.id);
+      return true;
+    });
+  };
+
+  // Media fields on an otherwise-valid row. The row is kept (its text is worth
+  // saving) but the damaged field is blanked AND reported, so a lost recording
+  // is never invisible just because the word around it was intact.
+  const scrubMedia = (store, rows, fields) =>
+    rows.map((row, index) => {
+      let out = row;
+      for (const field of fields) {
+        const v = row[field];
+        if (v == null) continue;
+        if (isUsableMedia(v)) continue;
+        omitted.push({
+          store,
+          index,
+          field,
+          identity: rowIdentity(store, row, index),
+          reason: `its ${field} is damaged and cannot be read`,
+        });
+        out = { ...out, [field]: null };
+      }
+      return out;
     });
 
   const categories = keep('categories', payload.categories, isUsableCategory, 'missing an id or a name');
   const words = keep('words', payload.words, isUsableWord, 'missing an id, its text, or its category');
-  // photos is absent in v1 files; each entry needs an id and image data.
+  // photos is absent in v1 files; each entry needs an id and real image data.
   const photos = keep(
     'photos',
     payload.photos,
-    (p) => p && typeof p.id === 'string' && typeof p.blob === 'string',
-    'missing an id or its image data'
+    (p) => p && typeof p.id === 'string' && isUsableMedia(p.blob),
+    'missing an id, or its picture is damaged'
   );
   // people/recordings are absent in v1/v2 files.
   const people = keep(
@@ -210,7 +254,16 @@ export function analyzeImportPayload(payload) {
     'missing an id or the person it belongs to'
   );
 
-  return { usable: { categories, words, photos, people, recordings }, omitted };
+  return {
+    usable: {
+      categories,
+      words: scrubMedia('words', words, ['photo', 'audioWord', 'audioPhrase']),
+      photos,
+      people: scrubMedia('people', people, ['photo', 'introAudio']),
+      recordings: scrubMedia('recordings', recordings, ['audioWord', 'audioPhrase', 'blob']),
+    },
+    omitted,
+  };
 }
 
 // Decodes every photo/audio back into Blobs and writes them in ONE
