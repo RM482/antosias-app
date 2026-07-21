@@ -445,27 +445,44 @@ bytes are already in hand. Remove and rename then need no hashing at all: the
 shadow digest is simply the surviving first variant's stored `sha256`. Restore
 merging works the same way, since imported variants arrive with their hashes.
 
-**C-A2a — normalising the existing legacy Blob (round 7).** Every phone in
-existence today stores a bare Blob with no hash, and §2.4's legacy read produces
-`{id:'legacy', blob, label:''}` — also with no hash. If that unhashed variant is
-still first when a mutation runs, the circular requirement returns. The fix is an
-explicit **optimistic normalise, fail-closed**:
+**C-A2a — normalising the existing legacy Blob.** Every phone today stores a bare
+Blob with no hash, and §2.4's legacy read produces a variant with no hash either.
+If that unhashed variant is still first when a mutation runs, the circular
+requirement returns.
 
-1. **Outside any transaction**, read the slot. If it holds a bare Blob, or any
-   variant lacking `sha256`, hash those bytes now (async is fine here).
-2. **Open the readwrite transaction and re-read the slot.** Verify it is still
-   byte-identical to what was hashed — compare `blob.size` and `blob.type`, and
-   for a variant list also the id set. This is the concurrency check.
-3. **If it matches**, write the normalised array, the shadow and the digest
-   together, then apply the mutation. **If it does not match**, another writer
-   (or a stale client) got there first: **abort the transaction, write nothing,
-   and retry the whole sequence from step 1**, at most a small fixed number of
-   times before reporting the failure to the parent.
+Round 7 proposed hashing outside and re-checking `blob.size` + `blob.type` inside
+the transaction. **Round 8 rejected that, correctly:** size and type are not byte
+identity, so a same-sized stale take would pass the check and be overwritten; and
+blindly retrying the mutation is worse still, because "remove the legacy variant"
+would then be applied to a *different* take that also normalises to the synthetic
+`legacy` id — destroying the very recording C-A1 promises to surface.
 
-Nothing is written on a mismatch, so a concurrent stale-client take is never
-overwritten — it is detected, and then handled by C-A1's "surface it to the
-parent" path. Normalisation is therefore lazy (first mutation of that slot), and
-a slot she never touches keeps working untouched through the legacy read.
+**The requirement is removed rather than satisfied.** Two observations:
+
+1. **The variant id does not need to be content-derived here.** Content
+   derivation exists only to make repeated *imports of the same file* idempotent
+   (§1.4). In-place normalisation has exactly one blob in one slot, so a fixed
+   `pv:legacy:<name>` is unique and sufficient. Import keeps its content-derived
+   id, and hashes outside a transaction where that is free.
+2. **Normalisation does not need to write the legacy key at all.** For a
+   single-variant slot the shadow *is* that same blob. So normalisation is purely
+   **additive**: create the `phrase-v2-*` array from the blob **read inside the
+   transaction**, and leave the legacy key untouched.
+
+That makes normalisation atomic, hash-free and incapable of losing bytes — it
+writes back exactly what it just read, in the same transaction, and touches
+nothing else. `sha256` starts `null` and is filled in later (on the next add,
+which hashes anyway, or lazily on read).
+
+Stale-client detection is unaffected and still async-safe: on **read** — outside
+any transaction — hash the current legacy blob and compare it to the stored
+shadow digest. A mismatch means an out-of-date client recorded something, and
+C-A1's "tell the parent, offer to import it as a variant" path runs. **Mutations
+on that slot are blocked until she resolves it**, so no retry loop can ever apply
+a stale mutation to a take it was not aimed at.
+
+A slot she never touches is never normalised and keeps working through the legacy
+read, indefinitely.
 
 The derived id for a legacy import (§1.4) uses that same digest, framed
 unambiguously as `sha256(mimeType + "\n" + bytes)` — length framing matters, or a

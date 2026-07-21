@@ -100,13 +100,31 @@ export async function remove(storeName, id) {
 // commits or none do. Used by backup restore so a failure partway through
 // (bad file, out of storage) can never leave a half-imported database.
 // `writes` looks like: { categories: [...], words: [...] }
-export async function putAllTransactional(writes, context = 'restoring data') {
+// `skipIfPresent` is `{ store: Set<id> }`: records whose id is listed are only
+// written when that id is NOT already in the database, checked INSIDE this
+// transaction. Restore uses it for rows it repaired (a damaged recording
+// blanked out) — those must never replace a record that appeared since the
+// file was analysed, because put() replaces the whole record and the live one
+// may hold good media. The check has to happen here rather than at analysis
+// time, or there is a window in which a write can land in between.
+export async function putAllTransactional(writes, context = 'restoring data', { skipIfPresent = {} } = {}) {
   const db = await openDB();
   const storeNames = Object.keys(writes);
   const t = db.transaction(storeNames, 'readwrite');
   for (const storeName of storeNames) {
     const store = t.objectStore(storeName);
-    for (const record of writes[storeName]) store.put(record);
+    const guarded = skipIfPresent[storeName];
+    for (const record of writes[storeName]) {
+      if (guarded && guarded.has(record.id)) {
+        // Same transaction, so nothing can slip in between this read and the put.
+        const req = store.get(record.id);
+        req.onsuccess = () => {
+          if (req.result === undefined) store.put(record);
+        };
+        continue;
+      }
+      store.put(record);
+    }
   }
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve();

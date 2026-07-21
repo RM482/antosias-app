@@ -181,10 +181,18 @@ function rowIdentity(store, row, index) {
 // damaged, and must never reach `fetch()`.
 // Structural check only. Deliberately no minimum length: a 1×1 PNG is a valid
 // ~70-character data URL, and rejecting media merely for being small would
-// discard data we cannot show is bad. Proving the bytes actually decode is
-// C-P6's job in the backup-hardening step.
-const DATA_URL_RE = /^data:[a-z]+\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,[A-Za-z0-9+/]+={0,2}$/i;
-const isUsableMedia = (v) => typeof v === 'string' && DATA_URL_RE.test(v);
+// discard data we cannot show is bad. Proving the bytes actually DECODE is
+// C-P6's job in the backup-hardening step — until then a correctly-labelled but
+// corrupt clip still passes here.
+// The type is restricted to image/audio because that is all these fields ever
+// hold; `data:text/html;base64,…` is not media and must not be written over
+// one. The payload length must be a valid base64 multiple of 4.
+const DATA_URL_RE = /^data:(image|audio|video)\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/i;
+const isUsableMedia = (v) => {
+  if (typeof v !== 'string' || !DATA_URL_RE.test(v)) return false;
+  const payload = v.slice(v.indexOf(',') + 1);
+  return payload.length > 0 && payload.length % 4 === 0;
+};
 
 const MEDIA_FIELDS = {
   words: ['photo', 'audioWord', 'audioPhrase'],
@@ -203,6 +211,7 @@ const damagedFields = (store, row) =>
 export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
   assertStructurallyValid(payload);
   const omitted = [];
+  const guardedIds = {};
   const has = (store, id) => !!(existingIds[store] && existingIds[store].has(id));
 
   const collect = (store, rows, isUsable, reason) => {
@@ -216,23 +225,30 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
     });
 
     // Two rows with one id: the transaction would put() both and the second
-    // would silently replace the first, while the summary counted two. Keep the
-    // LEAST DAMAGED copy rather than simply the first — if copy 1 has a broken
-    // recording and copy 2 has an intact one, keeping the first would throw
-    // away the only readable version of her audio.
+    // would silently replace the first, while the summary counted two. Pick the
+    // copy that PRESERVES THE MOST MEDIA, not merely the first, and not the one
+    // with the fewest damaged fields — by that measure a copy carrying no media
+    // at all beats a copy with a good photo and one broken clip, and her only
+    // photo would be thrown away. Ties keep the earlier copy.
+    const usableCount = (row) => (MEDIA_FIELDS[store] || []).filter((f) => isUsableMedia(row[f])).length;
     const byId = new Map();
     for (const entry of valid) {
       const prev = byId.get(entry.row.id);
       if (!prev) { byId.set(entry.row.id, entry); continue; }
+      const a = usableCount(entry.row);
+      const b = usableCount(prev.row);
       const better =
-        damagedFields(store, entry.row).length < damagedFields(store, prev.row).length ? entry : prev;
+        a > b || (a === b && damagedFields(store, entry.row).length < damagedFields(store, prev.row).length)
+          ? entry
+          : prev;
       const worse = better === entry ? prev : entry;
       byId.set(entry.row.id, better);
       omitted.push({
         store,
         index: worse.index,
+        kind: 'duplicate',
         identity: rowIdentity(store, worse.row, worse.index),
-        reason: 'another copy of this same id in the file was used instead',
+        reason: 'a second copy of this same entry in the file; the more complete copy was used',
       });
     }
 
@@ -245,6 +261,7 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
     //     to protect.
     // Either way it is reported by name.
     const out = [];
+    const guarded = new Set();
     for (const { row, index } of byId.values()) {
       const broken = damagedFields(store, row);
       if (broken.length === 0) { out.push(row); continue; }
@@ -253,17 +270,22 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
         store,
         index,
         field: broken.join(', '),
+        kind: live ? 'skipped' : 'repaired',
         identity: rowIdentity(store, row, index),
         reason: live
           ? `its ${broken.join(' and ')} in this file is damaged — the copy already on the phone was left alone`
-          : `its ${broken.join(' and ')} is damaged and could not be restored`,
+          : `its ${broken.join(' and ')} is damaged, so it comes back without that part`,
       });
       if (!live) {
         const cleaned = { ...row };
         for (const f of broken) cleaned[f] = null;
         out.push(cleaned);
+        // Absent when analysed, but something could be written before the
+        // restore transaction opens. Guarded rows are re-checked inside it.
+        guarded.add(row.id);
       }
     }
+    guardedIds[store] = guarded;
     return out;
   };
 
@@ -292,7 +314,7 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
     'missing an id or the person it belongs to'
   );
 
-  return { usable: { categories, words, photos, people, recordings }, omitted };
+  return { usable: { categories, words, photos, people, recordings }, omitted, guardedIds };
 }
 
 // Decodes every photo/audio back into Blobs and writes them in ONE
@@ -335,7 +357,11 @@ export async function applyImportPayload(analysis) {
     }))
   );
 
-  await putAllTransactional({ categories, words, photos, people, recordings });
+  await putAllTransactional(
+    { categories, words, photos, people, recordings },
+    'restoring data',
+    { skipIfPresent: analysis.guardedIds || {} }
+  );
   return {
     categories: categories.length,
     words: words.length,
@@ -343,7 +369,11 @@ export async function applyImportPayload(analysis) {
     people: people.length,
     recordings: recordings.length,
     omitted: analysis.omitted,
-    skipped: analysis.omitted.length,
+    // Only rows that were genuinely NOT written count as skipped. A repaired
+    // row (restored without its damaged clip) and a duplicate that lost to a
+    // more complete copy are reported, but they are not losses of an entry.
+    skipped: analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length,
+    repaired: analysis.omitted.filter((o) => o.kind === 'repaired').length,
   };
 }
 

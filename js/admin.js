@@ -462,13 +462,25 @@ async function renderCategories() {
           .join('\n');
         const more =
           analysis.omitted.length > 12 ? `\n…and ${analysis.omitted.length - 12} more.` : '';
+        // Not everything listed is a loss: some entries come back without a
+        // damaged clip, and some are duplicates where a better copy won. Saying
+        // "cannot be restored" about all of them would misdescribe it.
+        const lost = analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length;
+        const headline = lost
+          ? `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored, and there ${
+              analysis.omitted.length - lost === 1 ? 'is 1 other note' : `are ${analysis.omitted.length - lost} other notes`
+            }:`
+          : `${analysis.omitted.length} thing${analysis.omitted.length === 1 ? '' : 's'} to know about this backup:`;
         const proceed = confirm(
-          `${analysis.omitted.length} entr${analysis.omitted.length === 1 ? 'y is' : 'ies are'} damaged and cannot be restored:\n\n${lines}${more}\n\nRestore everything else? (Nothing has been changed yet. Keep this backup file either way — a newer version of the app may be able to read more of it.)`
+          `${headline}\n\n${lines}${more}\n\nGo ahead with the restore? (Nothing has been changed yet. Keep this backup file either way — a newer version of the app may be able to read more of it.)`
         );
         if (!proceed) return;
       }
       const result = await applyImportPayload(analysis);
-      const skippedNote = result.skipped ? ` (${result.skipped} damaged entr${result.skipped === 1 ? 'y' : 'ies'} could not be restored)` : '';
+      const notes = [];
+      if (result.skipped) notes.push(`${result.skipped} could not be restored`);
+      if (result.repaired) notes.push(`${result.repaired} came back without a damaged recording or picture`);
+      const skippedNote = notes.length ? ` (${notes.join('; ')})` : '';
       const peopleNote = result.people || result.recordings
         ? `, ${result.people} ${result.people === 1 ? 'person' : 'people'} and ${result.recordings} voice recording${result.recordings === 1 ? '' : 's'}`
         : '';
