@@ -1,30 +1,33 @@
-# Plan v6: phrase variety + photo-first intake
+# Plan v11: phrase variety + photo-first intake
 
-Status: **six Codex review rounds done. Round 6's three step-1 blockers are
-resolved below.** The features here are not built; the four live defects found
-along the way ARE fixed and shipped (v44) — see §4.0.
+Status: **BUILD-READY for step 1.** Thirteen Codex review rounds; round 13's
+verdict on step 1 (backup/restore hardening) was *"safe to start — yes"*, with
+C-P10b and the openDB fixes confirmed closed. Steps 2-6 are specified but only
+step 1 has been signed off to build.
 
-Round 6 named exactly three things blocking step 1, all now closed:
+The features here are not built. The **four live data-safety defects found while
+planning them ARE fixed and shipped** (v44, §4.0), along with the openDB
+robustness fixes.
 
-1. **The canonical digest was not canonical** — no fixed store order, "sorted by
-   `id`" was wrong for `meta` (which is keyed on `key`), and absent-vs-null was
-   left open. Pinned down in §1.2 C-P8.
-2. **Same-id overwrite had no explicit safety decision** — "merge by id" silently
-   let an old backup replace a newer photo or recording. Decided in C-P10a: the
-   backup still wins, but a conflict report names anything live that it would
-   replace.
-3. **The atomic shadow/digest write was circular.** Rounds 6-9 patched this four
-   times (digest, CAS, optimistic retry, additive normalisation) and round 9
-   broke it again. Resolved by deleting the design instead: the legacy key **is**
-   variant one rather than a copy of it, so two code generations never write the
-   same value and the whole race disappears (C-A1).
+### How this converged
 
-Judgement calls made rather than deferred, across rounds 4–6: **playback-only**
-stale-client compatibility (C-A1), **refuse** same-language matches in the Inbox
-rather than adopt (C-B20), **single-file** backup with a measured ceiling and
-chunking explicitly unspecified (C-P9), **backup-wins-but-never-silently** for
-same-id conflicts (C-P10a), and **no rework percentage** claimed for the Inbox
-split (§5).
+Rounds 1-5 found real defects in the plan (a privacy leak, a backup that would
+have silently stored empty audio, a restore that already lost data). Rounds 6-10
+then circled the same class four times: every design that let a cached old client
+keep writing the same keys could lose a recording. Round 10 said so explicitly —
+*"still circling the previously identified data-loss classes"* — which was the
+signal to change the constraint rather than patch again. Feature A now takes a
+database version bump, so an out-of-date client cannot open the database at all
+and the concurrent writer simply ceases to exist. Round 11 confirmed the class
+was gone and added: *"The version bump is not over-engineering. The shadows, CAS
+protocols and tombstones were."* Rounds 11-13 closed the remainder.
+
+**First commit of step 1** (per round 13): §1 in full and nothing else — split
+backup/share payloads, the recursive Blob codec with its non-empty assertion,
+restore aborting rather than silently skipping, per-key `meta` merge rules,
+referential validation, the two-phase cursor export, `rev` stamping with
+transactional conflict enforcement, and the verified-backup mechanism. No step-2
+audit or photo work in it.
 
 Two parent-requested features, plus the outstanding items inherited from the 14
 and 19 July sessions.
@@ -310,6 +313,9 @@ A heuristic is not good enough to gate irreplaceable audio.
 - Analysis captures the `rev` of every record it intends to overwrite. The write
   transaction re-reads each one and compares. **Any difference — including a
   `rev` that is now absent — means skip and report.** Never write through.
+- **Restore discards any `rev` that arrives in a backup file** and stamps every
+  record it writes with a fresh one. A token from another device (or another
+  time) describes a history this database does not have.
 - **Records written before this exists have no `rev`.** Handle those
   conservatively rather than optimistically: if the live record has no `rev` and
   carries any media, it is treated as *possibly changed* and skipped with a
