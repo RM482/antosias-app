@@ -1,8 +1,45 @@
-# Plan v3 (BUILD-READY PROPOSAL): decouple language-twin identity from photos
+# Plan v3.1: decouple language-twin identity from photos
 
-Status: **approved with changes by review; this is the revised, build-ready
-plan.** Not yet implemented. v1 was largely rejected; v2 was approved with
-required changes; v3 folds those in.
+Status: **NOT build-ready — amended 21 July 2026 and awaiting re-vet.** Not
+implemented. v1 was largely rejected; v2 was approved with required changes; v3
+folded those in and was called build-ready.
+
+**v3.1 (21 July 2026) removes that build-ready status.** Review of
+`VARIETY_AND_INTAKE_PLAN.md` found (a) the backup format number collided with
+that plan's and is now **v5**, not v4 (§9); (b) Release 1's "fresh backup" gate
+is not evidence that a usable backup exists, and its `count/hash` signature
+cannot detect content changes under a stable word id (§6); and (c) **three
+defects in the already-shipped v42 code** that would make this migration abort or
+misbehave — see "Live defects" below. Those must be repaired *before* Release 2
+is built, and this plan re-vetted, regardless of how sound §§2–5 remain.
+
+## Live defects in shipped v42 code (found 21 July, confirmed twice)
+
+None can corrupt words, photos or audio today — all three are read-only paths —
+but each is a migration blocker, and the first two can record a *false* parent
+decision that Release 2 would later act on.
+
+1. **The seed cohort never checks its own evidence.** §4's Rule B requires the
+   seed marker as evidence, but `detectSeedCohort` receives only words and checks
+   neither the markers (`seed:<language>:v1`, `js/db.js:572-593`) nor the
+   category records (`js/concepts.js:95-145`).
+2. **A cohort pair can overlap an ambiguous photo group**, so the audit can save
+   one word into two proposed pairs. `cohortPairs` excludes automatic photo pairs
+   but **not ambiguous ids** (`js/concepts.js:176-196`), and `validateManualPair`
+   never inspects already-reserved ids (`js/concepts.js:210-218`); both lists are
+   stored together (`js/admin.js:2448-2478`). Release 2 would then abort
+   deterministically — on the one migration that must be all-or-nothing over her
+   only copy.
+3. **`wordLanguage` coerces any unsupported explicit language to Dutch**
+   (`js/concepts.js:27-30`) where this plan requires validation failure. A
+   *missing* language may default to Dutch; an explicit invalid one must abort
+   and be repaired, or the migration would permanently rewrite it as Dutch.
+
+Also confirmed: the audit signature hashes **only word ids**
+(`js/concepts.js:153-165`), so a rename or a content change under a stable id is
+invisible to it — and **nothing calls `signaturesMatch`**, while Settings trusts
+`audit.ready` directly (`js/admin.js:1493-1519`). The v42 audit screen can
+therefore present stale decisions as actionable today.
 
 ## 1. The problem (verified in code at v41)
 
@@ -133,14 +170,28 @@ and 3 of v2 **merge**: there is no value in committing concept ids and *then*
 leaving a window in which ordinary use can create invalid data.
 
 **Release 1 — Prepare (no schema change, non-destructive).**
-1. Require and confirm a **fresh backup**.
+1. Require a **verified** backup — not a fresh-looking one. A timestamp is not
+   evidence: `lastBackupAt` is written whenever the share/download path returns
+   (`js/admin.js:390`), which proves neither that a file was retained nor that
+   nothing changed since. The parent **re-selects the exported file** and the app
+   validates it and compares its manifest against a freshly computed digest of
+   the current database, storing a non-exportable verification receipt. See
+   `VARIETY_AND_INTAKE_PLAN.md` C-P14 — that mechanism is a prerequisite of this
+   release, not an optional hardening.
 2. Audit: compute the proposed assignments; show the parent (a) the intact-cohort
    seed batch to confirm, and (b) any **ambiguous** photo groups.
 3. Let the parent resolve ambiguous groups explicitly — show language, category,
    label and photo; permit only valid one-Dutch/one-Polish selections; **"leave
    separate" is the safe default**.
-4. Store decisions **by word id**, with an audit version and a validation
-   count/hash, plus a readiness marker tied to this dataset.
+4. Store decisions **by word id**, with an audit version and a readiness marker
+   tied to this dataset. The fingerprint must be **content-sensitive**, not the
+   shipped id-only `count/hash` (`js/concepts.js:153-165`) — it must cover at
+   least each word's language, text, category and primary photo id, so a rename
+   or a re-pointed photo under a stable id invalidates the decisions. Release 2
+   must actually *compare* it; nothing calls `signaturesMatch` today.
+5. No proposed pair may reserve a word that another proposed pair already
+   reserves (live defect 2). Validation runs across the **combined** cohort +
+   manual set before anything is stored.
 
 **Release 2 — Migrate and enforce (ONE `versionchange` transaction).**
 1. Re-read and **revalidate** every word (and every recorded decision — discard any
@@ -174,6 +225,21 @@ Define a startup screen distinguishing:
 - **interrupted → safe retry**;
 - **out of space / backup problem**;
 - **data conflict → return to the audit/repair step**.
+
+**Three distinct failure paths, three distinct screens** (added v3.1 — the
+amendment introduced a pre-write restore outcome the original screen did not
+cover). They must not be collapsed into one generic error:
+
+| Failure | When | Recovery offered |
+|---|---|---|
+| **Malformed restore** | Import validation, before any write | Name the bad records; keep the file; no writes happened |
+| **Restore concept conflict** | Import derivation, before any write | Parent-facing conflict screen; no writes happened |
+| **DB upgrade failure** | `versionchange`, mid-migration | The startup screen above; old DB intact; forward-only recovery shell |
+
+Only the third can leave the app unable to launch, which is why its recovery
+shell is built and tested **before** the migration deploys. Rollback to a
+pre-v4 build is unsupported: v43 code calling `indexedDB.open(name, 3)`
+(`js/db.js:17`) fails with `VersionError` once the database is at v4.
 
 The concept-only admin UI must **never** run against an old or partially prepared
 schema.
@@ -225,13 +291,53 @@ Also required:
 - **Seeding** (`js/db.js:517`, `js/db.js:601`) — shared `key` + deterministic `conceptId`.
 - **Word-editor conflict handling** (`js/admin.js:1259-1270`) — §8.
 - **Photo replacement** (`js/admin.js:114`, `js/db.js:233`) — §7.
-- **Backup** — `formatVersion` 4, carry `conceptId`. Restore is **merge-by-ID**
-  (`js/backup.js:154`), so derive/validate against the **complete proposed post-merge
-  set**, not just the payload. Distinguish three outcomes: safe overwrite by identical
-  word id; resolvable old-format relationship; **genuine concept collision → report to
-  the parent**, never silently remap or abort with a generic error. Backups do **not**
-  carry `meta` (`js/backup.js:31`), so a restore invalidates the Release-1 audit — it
-  must be re-run.
+- **Backup/export compatibility** — concept-aware payloads use **`formatVersion: 5`,
+  not 4** (amended 21 July 2026; see `VARIETY_AND_INTAKE_PLAN.md` §1.3). Format v4 is
+  reserved for private pre-concept backups carrying allowlisted `meta`; pre-concept
+  **share** payloads remain v3. A v5 backup carries the v4 private `meta`; a v5 share
+  **never** carries `meta`.
+
+  **Export `formatVersion` and IndexedDB `DB_VERSION` are unrelated and must never be
+  read as parallel.** A v4 *backup* is produced by a device still on **DB v3**;
+  concept-aware **DB v4** produces export **v5**.
+
+  **Accepted `(formatVersion, payloadKind)` combinations — reject anything else:**
+
+  | Version | Kind | Meaning |
+  |---|---|---|
+  | 1, 2, 3 | *absent* | Legacy export (kind was not yet recorded) |
+  | 3 | `share` | Pre-concept share |
+  | 4 | `backup` | Private pre-concept backup, carries `meta` |
+  | 5 | `backup` | Concept-aware backup, carries `meta` |
+  | 5 | `share` | Concept-aware share, **must not** carry `meta` |
+
+  Explicitly rejected: `4 + share`; version 5 with a missing or unknown kind; **any
+  share payload containing a `meta` key** (a hard error, not a filter — it means the
+  file was built by the wrong path); unknown versions.
+
+  Restore stays **merge-by-ID** (`js/backup.js:154`). For **v1–v4** input, derive and
+  validate `conceptId` against the **complete proposed post-merge set**, not just the
+  payload; for **v5** input, validate the supplied concepts against that same complete
+  set.
+
+  **Old-format derivation rules (v1–v4), stated as an algorithm:**
+  1. Overwriting a word by identical id **preserves the existing `conceptId`** — a
+     restore of an old file must never strip a concept the device already has.
+  2. The **only** evidence that may create a *new* relationship is Rule A applied to
+     the complete post-merge set: a `photoId` shared by exactly one Dutch and exactly
+     one Polish word. Name matches create nothing (§4).
+  3. A **restored `twinAudit` may not be used as evidence.** It is stored
+     `ready: false`, and "historical" has to mean non-actionable or the flag is
+     decorative.
+  4. **Seed confirmations do not survive a restore** — seed markers are deliberately
+     never exported (`VARIETY_AND_INTAKE_PLAN.md` C-P4), so a restored dataset needs
+     the audit re-run before Release 2.
+  5. A genuine collision → **zero writes**, and the parent-facing conflict screen
+     above; never a silent remap, never a generic error.
+
+  (Superseded note: this section previously said backups do not carry `meta` at all.
+  That was true of v3 and is what `VARIETY_AND_INTAKE_PLAN.md` §1 fixes; a restore
+  still invalidates the Release-1 audit, which must be re-run.)
 
 Confirmed **not** affected (do not change):
 - Sessions / child mode (`js/session.js:199`, `js/child.js:118`) — act on individual
@@ -256,6 +362,19 @@ Confirmed **not** affected (do not change):
 - Photo fork → the other twin's photo is unchanged; no orphaned photo on a failed save.
 - Three-way link attempt → refused and explained before any mutation.
 - Editor's same-name adoption → now asks, like the wizard.
-- Backup: v4 round-trip keeps twins; a v3 file derives against the post-merge set; a
-  concept collision is reported, not swallowed.
+- Backup: a **v5 backup** round-trip keeps twins *and* private `meta`; a **v5 share**
+  contains no `meta`; a **v4 backup** and a **v3 share** derive concepts against the
+  complete post-merge set; a genuine concept collision is reported before any write.
+- Backup, version/kind matrix — one test per row and per rejected combination:
+  v1, v2, legacy kind-less v3, `3+share`, `4+backup`, `5+backup`, `5+share`; and
+  refusal of `4+share`, v5 with missing/unknown kind, a share carrying `meta`, and
+  an unknown version.
+- Backup, restore edge cases: duplicate word ids **and** duplicate `meta` keys within
+  one payload are rejected; overwriting by identical id **preserves** an existing
+  `conceptId`; a restored `twinAudit` is inert as evidence; a genuine collision
+  performs **zero** writes and reaches the conflict screen.
+- Audit repair (live defects): a cohort pair overlapping an ambiguous group is
+  refused before storage; a word cannot be reserved by two proposed pairs; an
+  explicit unsupported `language` aborts rather than becoming Dutch; a rename under
+  a stable id invalidates the stored decisions.
 - Category delete cascade (v41 safety) still fires only on a strong link.
