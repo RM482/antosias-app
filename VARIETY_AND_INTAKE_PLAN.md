@@ -445,6 +445,28 @@ bytes are already in hand. Remove and rename then need no hashing at all: the
 shadow digest is simply the surviving first variant's stored `sha256`. Restore
 merging works the same way, since imported variants arrive with their hashes.
 
+**C-A2a — normalising the existing legacy Blob (round 7).** Every phone in
+existence today stores a bare Blob with no hash, and §2.4's legacy read produces
+`{id:'legacy', blob, label:''}` — also with no hash. If that unhashed variant is
+still first when a mutation runs, the circular requirement returns. The fix is an
+explicit **optimistic normalise, fail-closed**:
+
+1. **Outside any transaction**, read the slot. If it holds a bare Blob, or any
+   variant lacking `sha256`, hash those bytes now (async is fine here).
+2. **Open the readwrite transaction and re-read the slot.** Verify it is still
+   byte-identical to what was hashed — compare `blob.size` and `blob.type`, and
+   for a variant list also the id set. This is the concurrency check.
+3. **If it matches**, write the normalised array, the shadow and the digest
+   together, then apply the mutation. **If it does not match**, another writer
+   (or a stale client) got there first: **abort the transaction, write nothing,
+   and retry the whole sequence from step 1**, at most a small fixed number of
+   times before reporting the failure to the parent.
+
+Nothing is written on a mismatch, so a concurrent stale-client take is never
+overwritten — it is detected, and then handled by C-A1's "surface it to the
+parent" path. Normalisation is therefore lazy (first mutation of that slot), and
+a slot she never touches keeps working untouched through the legacy read.
+
 The derived id for a legacy import (§1.4) uses that same digest, framed
 unambiguously as `sha256(mimeType + "\n" + bytes)` — length framing matters, or a
 type/bytes boundary could be ambiguous.

@@ -4,7 +4,7 @@ import { startSession, initSession, showStickerBook } from './session.js?v=44';
 import { startChildMode } from './child.js?v=44';
 import { el } from './dom.js?v=44';
 import { buildAuditPlan, validateManualPair } from './concepts.js?v=44';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=44';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, readExistingIds, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=44';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -454,7 +454,7 @@ async function renderCategories() {
       // is told exactly what, by name, and decides. Declining writes nothing.
       // (Damaged photos, people and recordings used to be dropped silently —
       // they were not even counted.)
-      const analysis = analyzeImportPayload(payload);
+      const analysis = analyzeImportPayload(payload, { existingIds: await readExistingIds() });
       if (analysis.omitted.length > 0) {
         const lines = analysis.omitted
           .slice(0, 12)

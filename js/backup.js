@@ -176,94 +176,123 @@ function rowIdentity(store, row, index) {
 //
 // Pure and synchronous: no decoding, no database access. Returns the usable
 // rows plus an itemised list of everything omitted and why.
-// Media travels as a base64 `data:` URL. Anything else — an empty string, a
-// stray "null", an http URL — is damaged, and must never reach `fetch()`.
-const isUsableMedia = (v) => typeof v === 'string' && v.startsWith('data:') && v.length > 'data:'.length;
+// Media travels as a base64 `data:` URL with a real media type and a payload.
+// Anything else — an empty string, `data:,`, a stray "null", an http URL — is
+// damaged, and must never reach `fetch()`.
+// Structural check only. Deliberately no minimum length: a 1×1 PNG is a valid
+// ~70-character data URL, and rejecting media merely for being small would
+// discard data we cannot show is bad. Proving the bytes actually decode is
+// C-P6's job in the backup-hardening step.
+const DATA_URL_RE = /^data:[a-z]+\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,[A-Za-z0-9+/]+={0,2}$/i;
+const isUsableMedia = (v) => typeof v === 'string' && DATA_URL_RE.test(v);
 
-export function analyzeImportPayload(payload) {
+const MEDIA_FIELDS = {
+  words: ['photo', 'audioWord', 'audioPhrase'],
+  people: ['photo', 'introAudio'],
+  recordings: ['audioWord', 'audioPhrase', 'blob'],
+  photos: ['blob'],
+  categories: [],
+};
+
+const damagedFields = (store, row) =>
+  (MEDIA_FIELDS[store] || []).filter((f) => row[f] != null && !isUsableMedia(row[f]));
+
+// `existingIds` is `{ store: Set<id> }` for what the database already holds —
+// read by the caller and passed in so this stays pure and write-free. It is
+// what lets a damaged row be handled correctly: see the media rules below.
+export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
   assertStructurallyValid(payload);
   const omitted = [];
+  const has = (store, id) => !!(existingIds[store] && existingIds[store].has(id));
 
-  const keep = (store, rows, isUsable, reason) => {
-    const seenIds = new Set();
-    return (rows || []).filter((row, index) => {
+  const collect = (store, rows, isUsable, reason) => {
+    const valid = [];
+    (rows || []).forEach((row, index) => {
       if (!isUsable(row)) {
         omitted.push({ store, index, identity: rowIdentity(store, row, index), reason });
-        return false;
+        return;
       }
-      // Two rows with one id: the transaction would put() both and the second
-      // would silently replace the first, while the summary counted two.
-      // Keep the first, report the rest — the file itself is contradictory and
-      // there is no basis for preferring the later copy.
-      if (seenIds.has(row.id)) {
-        omitted.push({
-          store,
-          index,
-          identity: rowIdentity(store, row, index),
-          reason: 'a second copy of this same id in the file',
-        });
-        return false;
-      }
-      seenIds.add(row.id);
-      return true;
+      valid.push({ row, index });
     });
+
+    // Two rows with one id: the transaction would put() both and the second
+    // would silently replace the first, while the summary counted two. Keep the
+    // LEAST DAMAGED copy rather than simply the first — if copy 1 has a broken
+    // recording and copy 2 has an intact one, keeping the first would throw
+    // away the only readable version of her audio.
+    const byId = new Map();
+    for (const entry of valid) {
+      const prev = byId.get(entry.row.id);
+      if (!prev) { byId.set(entry.row.id, entry); continue; }
+      const better =
+        damagedFields(store, entry.row).length < damagedFields(store, prev.row).length ? entry : prev;
+      const worse = better === entry ? prev : entry;
+      byId.set(entry.row.id, better);
+      omitted.push({
+        store,
+        index: worse.index,
+        identity: rowIdentity(store, worse.row, worse.index),
+        reason: 'another copy of this same id in the file was used instead',
+      });
+    }
+
+    // Rows whose media is damaged. Which way this goes depends on whether the
+    // record already exists here, because `put()` REPLACES the whole record:
+    //   • already on the phone → skip the row entirely. Writing it would blank
+    //     a recording that is currently fine. The live copy is left untouched.
+    //   • not on the phone (a wipe/reinstall restore) → keep it with the broken
+    //     field emptied. The word's text is worth having; there is nothing live
+    //     to protect.
+    // Either way it is reported by name.
+    const out = [];
+    for (const { row, index } of byId.values()) {
+      const broken = damagedFields(store, row);
+      if (broken.length === 0) { out.push(row); continue; }
+      const live = has(store, row.id);
+      omitted.push({
+        store,
+        index,
+        field: broken.join(', '),
+        identity: rowIdentity(store, row, index),
+        reason: live
+          ? `its ${broken.join(' and ')} in this file is damaged — the copy already on the phone was left alone`
+          : `its ${broken.join(' and ')} is damaged and could not be restored`,
+      });
+      if (!live) {
+        const cleaned = { ...row };
+        for (const f of broken) cleaned[f] = null;
+        out.push(cleaned);
+      }
+    }
+    return out;
   };
 
-  // Media fields on an otherwise-valid row. The row is kept (its text is worth
-  // saving) but the damaged field is blanked AND reported, so a lost recording
-  // is never invisible just because the word around it was intact.
-  const scrubMedia = (store, rows, fields) =>
-    rows.map((row, index) => {
-      let out = row;
-      for (const field of fields) {
-        const v = row[field];
-        if (v == null) continue;
-        if (isUsableMedia(v)) continue;
-        omitted.push({
-          store,
-          index,
-          field,
-          identity: rowIdentity(store, row, index),
-          reason: `its ${field} is damaged and cannot be read`,
-        });
-        out = { ...out, [field]: null };
-      }
-      return out;
-    });
-
-  const categories = keep('categories', payload.categories, isUsableCategory, 'missing an id or a name');
-  const words = keep('words', payload.words, isUsableWord, 'missing an id, its text, or its category');
-  // photos is absent in v1 files; each entry needs an id and real image data.
-  const photos = keep(
+  const categories = collect('categories', payload.categories, isUsableCategory, 'missing an id or a name');
+  const words = collect('words', payload.words, isUsableWord, 'missing an id, its text, or its category');
+  // photos is absent in v1 files. A photo IS its image, so unlike a word there
+  // is no salvageable remainder — a damaged one is rejected outright rather
+  // than kept with an empty blob.
+  const photos = collect(
     'photos',
     payload.photos,
     (p) => p && typeof p.id === 'string' && isUsableMedia(p.blob),
     'missing an id, or its picture is damaged'
   );
   // people/recordings are absent in v1/v2 files.
-  const people = keep(
+  const people = collect(
     'people',
     payload.people,
     (p) => p && typeof p.id === 'string' && typeof p.name === 'string',
     'missing an id or a name'
   );
-  const recordings = keep(
+  const recordings = collect(
     'recordings',
     payload.recordings,
     (r) => r && typeof r.id === 'string' && typeof r.personId === 'string',
     'missing an id or the person it belongs to'
   );
 
-  return {
-    usable: {
-      categories,
-      words: scrubMedia('words', words, ['photo', 'audioWord', 'audioPhrase']),
-      photos,
-      people: scrubMedia('people', people, ['photo', 'introAudio']),
-      recordings: scrubMedia('recordings', recordings, ['audioWord', 'audioPhrase', 'blob']),
-    },
-    omitted,
-  };
+  return { usable: { categories, words, photos, people, recordings }, omitted };
 }
 
 // Decodes every photo/audio back into Blobs and writes them in ONE
@@ -325,8 +354,19 @@ export async function applyImportPayload(analysis) {
 // show the parent what is being dropped must not drop anything. The restore
 // screen analyses first, lists the omissions, and only then calls this with
 // `allowOmissions` after an explicit confirmation.
+// Reads which ids the database already holds, so analysis can tell a
+// wipe-recovery restore (nothing to protect) from a merge into live data
+// (where writing a damaged row would destroy a good one).
+export async function readExistingIds() {
+  const stores = ['categories', 'words', 'photos', 'people', 'recordings'];
+  const sets = await Promise.all(
+    stores.map(async (s) => [s, new Set((await getAll(s)).map((r) => r.id))])
+  );
+  return Object.fromEntries(sets);
+}
+
 export async function importPayload(payload, { allowOmissions = false } = {}) {
-  const analysis = analyzeImportPayload(payload);
+  const analysis = analyzeImportPayload(payload, { existingIds: await readExistingIds() });
   if (analysis.omitted.length > 0 && !allowOmissions) {
     const names = analysis.omitted.slice(0, 5).map((o) => `${o.store}: ${o.identity}`).join(', ');
     const more = analysis.omitted.length > 5 ? `, and ${analysis.omitted.length - 5} more` : '';
