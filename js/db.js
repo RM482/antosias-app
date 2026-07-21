@@ -3,6 +3,13 @@ const DB_VERSION = 3;
 
 let dbPromise = null;
 
+// Set by the UI so a blocked upgrade can be explained to the parent while it
+// waits, instead of the app just appearing to hang.
+let onBlocked = null;
+export function setDatabaseBlockedHandler(fn) {
+  onBlocked = fn;
+}
+
 // IndexedDB failure objects (req.error / transaction.error) can be null in
 // some situations — e.g. aborted transactions, or storage restrictions in
 // private browsing — so always substitute a real Error with a readable
@@ -13,7 +20,8 @@ function storageError(rawError, context) {
 
 function openDB() {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  let thisPromise;
+  thisPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -51,28 +59,30 @@ function openDB() {
       // A LATER version wants to upgrade while this connection is open. Close
       // it so the upgrade isn't blocked forever — without this, a second tab or
       // a lingering connection stalls the next release's migration indefinitely
-      // and it never reports why.
-      db.onversionchange = () => db.close();
+      // and never reports why. The cached promise MUST be dropped too, or every
+      // later call hands out this now-closed connection.
+      db.onversionchange = () => {
+        db.close();
+        if (dbPromise === thisPromise) dbPromise = null;
+      };
       resolve(db);
     };
-    // This open is itself blocked by an older connection elsewhere. Distinct
-    // from a failed migration: nothing is wrong with the data, something just
-    // has not let go yet. Report it as its own case so the recovery screen can
-    // say "close the app everywhere and reopen" rather than "migration failed".
+    // Blocked means this open is WAITING on an older connection, not that it
+    // failed — the request stays live and may still succeed. So do not reject:
+    // rejecting would not cancel it, and the caller would retry while this one
+    // quietly opened a second connection nobody tracks. Just tell the app, so
+    // it can say "close it elsewhere / force-quit and reopen" while we wait.
     req.onblocked = () => {
-      reject(
-        new Error(
-          'The app is open somewhere else and is holding the database. Close it there (or force-quit and reopen) and try again.'
-        )
-      );
+      if (onBlocked) onBlocked();
     };
     req.onerror = () => reject(storageError(req.error, 'opening the database'));
   });
   // A failed open must not be cached forever: without this every later call
   // reuses the rejection and the app cannot recover without a full reload.
-  dbPromise.catch(() => {
-    dbPromise = null;
+  thisPromise.catch(() => {
+    if (dbPromise === thisPromise) dbPromise = null;
   });
+  dbPromise = thisPromise;
   return dbPromise;
 }
 

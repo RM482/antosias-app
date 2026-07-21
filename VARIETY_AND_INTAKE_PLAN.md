@@ -294,16 +294,28 @@ late conflict is skipped and reported afterwards, never written through.
 **C-P10b — and it must detect a CHANGED record, not only a newly-present one.**
 `skipIfPresent` compares presence, so a record that already existed at analysis
 time and was then *modified* — a re-recorded clip, a replaced photo — is still
-overwritten with no report. Analysis therefore captures a per-id **revision
-token** for every record it intends to overwrite: `updatedAt` where the record
-carries one, else the byte sizes of its media fields. The write transaction
-re-reads each such record and compares; **any mismatch means skip and report**,
-never write through. Presence alone is not sufficient evidence that the thing on
-the phone is still what the parent was shown.
+overwritten with no report.
 
-(v44 already widened the warning text to name photos, recordings and people, and
-implemented the in-transaction re-check for repaired rows; the itemised conflict
-report is step 1's work.)
+Round 12 rejected the first fix for this (compare `updatedAt`, else media byte
+sizes): a replacement Blob can be exactly the same size, `updatedAt` is not
+mandatory, and photo writes carry no timestamp at all (`js/db.js:263`, `:279`).
+A heuristic is not good enough to gate irreplaceable audio.
+
+**Step 1 therefore introduces a real revision token, `rev`.**
+
+- `rev` is a fresh `newId()` value written by **every** path that saves a record
+  to a protected store — `saveWord`, `savePhoto`, `savePerson`, the recordings
+  writers, and restore itself. Not a counter, not a timestamp: a new opaque
+  value on every write, so "changed" is exact rather than inferred.
+- Analysis captures the `rev` of every record it intends to overwrite. The write
+  transaction re-reads each one and compares. **Any difference — including a
+  `rev` that is now absent — means skip and report.** Never write through.
+- **Records written before this exists have no `rev`.** Handle those
+  conservatively rather than optimistically: if the live record has no `rev` and
+  carries any media, it is treated as *possibly changed* and skipped with a
+  report. She can then decide per record. Every save after step 1 stamps one, so
+  this shrinks to nothing through normal use, and the app is never guessing about
+  a recording it cannot verify.
 
 **C-P11 — a malformed blob-bearing record ABORTS the restore.** Any malformed word,
 photo, person, recording or allowlisted `meta` record stops the restore before any
@@ -958,6 +970,11 @@ retention, HEIC fallback, mic interruption and resume UX.
 **C-V3 — deterministic selection tests.** Inject the RNG and test the selection
 function directly rather than sampling "~20 questions", which makes results flaky.
 
+- **Restore conflict detection (C-P10b):** a record modified between analysis and
+  the write is **skipped and reported**, not overwritten — asserted by mutating
+  the record inside the harness after analysis returns; a record with no `rev`
+  and media attached is treated as possibly-changed and skipped; a genuinely
+  untouched record is written normally.
 - **Backup (the largest suite):** every Blob location round-trips to a non-empty
   playable blob, **including nested ledger audio**; corruption in each Blob location
   aborts with **zero writes**; the share payload contains no `meta` (C-P1) and no
