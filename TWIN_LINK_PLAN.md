@@ -243,7 +243,7 @@ cover). They must not be collapsed into one generic error:
 
 Only the third can leave the app unable to launch, which is why its recovery
 shell is built and tested **before** the migration deploys. Rollback to a
-pre-v4 build is unsupported: v43 code calling `indexedDB.open(name, 3)`
+pre-bump build is unsupported: v43 code calling `indexedDB.open(name, 3)`
 (`js/db.js:17`) fails with `VersionError` once the database is at v4.
 
 The concept-only admin UI must **never** run against an old or partially prepared
@@ -304,7 +304,9 @@ Also required:
 
   **Export `formatVersion` and IndexedDB `DB_VERSION` are unrelated and must never be
   read as parallel.** A v4 *backup* is produced by a device still on **DB v3**;
-  concept-aware **DB v4** produces export **v5**.
+  concept-aware **DB v5** produces export **v5**. (Feature A takes DB v4; see
+  `VARIETY_AND_INTAKE_PLAN.md` C-A1. The two sequences are independent — a v4
+  *backup* is written by a device on DB v3 or v4.)
 
   **Accepted `(formatVersion, payloadKind)` combinations — reject anything else:**
 

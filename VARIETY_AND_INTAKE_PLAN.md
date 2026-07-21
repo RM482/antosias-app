@@ -291,6 +291,16 @@ same rule `skipIfPresent` already implements in code (`js/db.js:103`): a record
 appearing between the report and the write must not be silently overwritten. A
 late conflict is skipped and reported afterwards, never written through.
 
+**C-P10b — and it must detect a CHANGED record, not only a newly-present one.**
+`skipIfPresent` compares presence, so a record that already existed at analysis
+time and was then *modified* — a re-recorded clip, a replaced photo — is still
+overwritten with no report. Analysis therefore captures a per-id **revision
+token** for every record it intends to overwrite: `updatedAt` where the record
+carries one, else the byte sizes of its media fields. The write transaction
+re-reads each such record and compares; **any mismatch means skip and report**,
+never write through. Presence alone is not sufficient evidence that the thing on
+the phone is still what the parent was shown.
+
 (v44 already widened the warning text to name photos, recordings and people, and
 implemented the in-transaction re-check for repaired rows; the itemised conflict
 report is step 1's work.)
@@ -317,6 +327,19 @@ Required behaviour:
 Variants all carry ids after C-A1a, so the union rule is uniform and importing
 the same file twice cannot duplicate a clip.
 
+**C-P12b — a backup taken BEFORE Feature A carries a bare Blob, and must merge
+onto the same variant rather than beside it.** Step 1 ships before Feature A, so
+v4 backups will exist that hold `phrase-<name>` as a plain Blob with no id. The
+rule is one deterministic id, used **identically** by the C-A1a upgrade and by
+import: **`pv:1:<slot>`** (e.g. `pv:1:clickOnDe`). Only one pre-variant clip can
+ever have existed per slot, so the id is unique and stable without hashing.
+Therefore:
+- C-A1a converts the bare Blob to `{ id: 'pv:1:<slot>', blob, label: '' }`.
+- Import converts a bare Blob in a payload to exactly the same id.
+- The union rule then does the right thing automatically: same clip → same id →
+  the current one wins, no duplicate; a genuinely different later variant has its
+  own id and is added.
+
 **C-P12a — restoring an old backup DOES bring back things deleted since it was
 made. That is accepted and stated, not engineered away.** Round 10 raised this
 for phrase variants, but it is not phrase-specific: merge-by-id restore has
@@ -336,7 +359,7 @@ Promoted from "deferred" (v3 §4.4) because a *verified* backup is about to gate
 destructive migration. Validate that every word's category exists; every
 `photoId`/`extraPhotoIds` target exists; every word recording references an
 existing word and person; every ledger item references an existing photo; and,
-once on DB v4, that concept constraints hold.
+once on DB v5, that concept constraints hold.
 
 ### 1.5 The verified-backup mechanism (replaces the timestamp gate)
 
@@ -351,7 +374,7 @@ but unimplementable as written. Concretely:
 parent **re-selects the exported file**; the app validates all records and media,
 then compares that manifest against a **freshly computed digest of the current
 database**. Success stores a **non-exportable verification receipt**. Release 2
-runs this as an **asynchronous preflight before calling `indexedDB.open(…, 4)`**;
+runs this as an **asynchronous preflight before calling `indexedDB.open(…, 5)`**;
 if the digests differ, it shows the backup screen and never starts the upgrade.
 
 This also makes Release 2's required migration-failure screen feasible: the
@@ -438,9 +461,17 @@ same treatment — **the forward-recovery shell (C-S2) is built and tested befor
 this ships, not before Release 2.** It simply moves earlier in the queue.
 
 **C-A1a — the migration itself.** Inside the v3→v4 `versionchange`: for each
-phrase slot holding a bare Blob, write `[{ id, blob, label: '' }]` in its place.
-Pure and synchronous (no hashing, no `await`), one transaction, and it either
-completes or the database stays at v3 with nothing changed.
+phrase slot holding a bare Blob, write `[{ id: 'pv:1:<slot>', blob, label: '' }]`
+in its place (id per C-P12b). Pure and synchronous (no hashing, no `await`), one
+transaction, and it either completes or the database stays at v3 with nothing
+changed.
+
+**C-A1b — upgrades compose by `oldVersion`, because a phone can jump straight
+from v3 to v5.** If she skips the Feature A release, the Release 2 upgrade opens
+a v3 database at version 5 and must run **both** steps, in order, in that single
+`versionchange`: the phrase conversion first, then the concept migration. Every
+`onupgradeneeded` branches on `event.oldVersion` and applies each step it has not
+yet had — never assume the previous release ran.
 
 ### 2.4 API (`js/db.js`)
 

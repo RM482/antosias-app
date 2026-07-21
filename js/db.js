@@ -46,8 +46,32 @@ function openDB() {
         store.createIndex('wordId', 'wordId');
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // A LATER version wants to upgrade while this connection is open. Close
+      // it so the upgrade isn't blocked forever — without this, a second tab or
+      // a lingering connection stalls the next release's migration indefinitely
+      // and it never reports why.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    // This open is itself blocked by an older connection elsewhere. Distinct
+    // from a failed migration: nothing is wrong with the data, something just
+    // has not let go yet. Report it as its own case so the recovery screen can
+    // say "close the app everywhere and reopen" rather than "migration failed".
+    req.onblocked = () => {
+      reject(
+        new Error(
+          'The app is open somewhere else and is holding the database. Close it there (or force-quit and reopen) and try again.'
+        )
+      );
+    };
     req.onerror = () => reject(storageError(req.error, 'opening the database'));
+  });
+  // A failed open must not be cached forever: without this every later call
+  // reuses the rejection and the app cannot recover without a full reload.
+  dbPromise.catch(() => {
+    dbPromise = null;
   });
   return dbPromise;
 }
