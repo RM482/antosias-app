@@ -1,4 +1,4 @@
-import { SEED_DATA } from './db.js?v=43';
+import { SEED_DATA } from './db.js?v=44';
 
 // Language-twin planning (TWIN_LINK_PLAN.md).
 //
@@ -18,15 +18,34 @@ import { SEED_DATA } from './db.js?v=43';
 
 export const SUPPORTED_LANGUAGES = ['nl', 'pl'];
 
-// Legacy words can have NO `language` field at all — the app has always papered
-// over this with `language ?? 'nl'`. That matters enormously here: IndexedDB
-// will not index a record whose compound key path has a missing component, so a
-// unique [conceptId, language] index would silently SKIP exactly those legacy
-// Dutch words. The migration must PERSIST this normalised value, not just read
-// through it.
+// Returns the normalised language, or NULL when the record carries an explicit
+// value this app does not support. The two cases are genuinely different:
+//
+// MISSING — legacy words that never stored one. The app has always papered over
+// this with `language ?? 'nl'`, and those really are the oldest Dutch words, so
+// 'nl' is the right answer. It matters enormously that the migration PERSISTS
+// that value rather than just reading through it: IndexedDB will not index a
+// record whose compound key path has a missing component, so a unique
+// [conceptId, language] index would silently SKIP exactly these words.
+//
+// EXPLICIT BUT UNSUPPORTED — 'NL', 'de', '' — a record nobody can interpret.
+// This used to be coerced to Dutch, which made it invisible and would have let
+// the migration persist that guess, permanently relabelling her data. Null
+// propagates safely through every caller here: such a word matches no twin,
+// joins no clean photo pair, and satisfies no seed entry, so it is excluded
+// from pairing and reported instead (see collectLanguageIssues).
 export function wordLanguage(word) {
-  const lang = word.language ?? 'nl';
-  return SUPPORTED_LANGUAGES.includes(lang) ? lang : 'nl';
+  if (word.language == null) return 'nl'; // legacy: never stored one
+  return SUPPORTED_LANGUAGES.includes(word.language) ? word.language : null;
+}
+
+// Words whose stored language cannot be interpreted. The planner reports these
+// rather than guessing; the audit must not be saved while any exist, and the
+// migration must abort rather than normalise them to Dutch.
+export function collectLanguageIssues(words) {
+  return words
+    .filter((w) => wordLanguage(w) === null)
+    .map((w) => ({ id: w.id, word: w.word || '', language: w.language }));
 }
 
 export function otherLanguage(lang) {
@@ -92,16 +111,53 @@ export function classifyPhotoGroups(words) {
 //
 // Even when intact, the result is a PROPOSAL for the parent to confirm as a
 // batch — it is never applied silently.
-export function detectSeedCohort(words) {
+// `markers` is the meta seed markers (`seed:nl:v1` / `seed:pl:v1`) and
+// `categories` the stored category records — both passed IN by the caller so
+// this stays pure and synchronous (it runs inside a versionchange transaction).
+//
+// The seed marker is REQUIRED evidence (plan §4 Rule B) and was previously not
+// consulted at all. Note it is still not provenance on its own: `ensureSeeded`
+// back-fills the Dutch marker on pre-multi-language installs WITHOUT seeding
+// (`js/db.js:579`), so an old phone can carry the Dutch marker over words that
+// never came from the seed. That is exactly why the intact-cohort test below —
+// every entry, both languages, exactly one exact match — has to carry the real
+// weight, and why the parent still confirms the batch.
+export function detectSeedCohort(words, { markers = {}, categories = [] } = {}) {
+  const seedMarker = (lang) => !!markers[`seed:${lang}:v1`];
+  if (!seedMarker('nl') || !seedMarker('pl')) {
+    return { intact: false, reason: 'no-seed-marker', pairs: [] };
+  }
+
+  // Dutch categories seeded before the language prefix existed are `cat-x`
+  // where SEED_DATA now says `nl-cat-x`. Only that one explicit alias is
+  // accepted — never a general suffix match, which would let an unrelated
+  // `pl-cat-toys` satisfy `nl-cat-toys`.
+  const categoryAliases = (lang, seedCategoryId) =>
+    lang === 'nl' && seedCategoryId.startsWith('nl-')
+      ? [seedCategoryId, seedCategoryId.slice(3)]
+      : [seedCategoryId];
+
+  const categoryIds = new Set(categories.map((c) => c.id));
+  const categoriesPresent = (lang) =>
+    ((SEED_DATA[lang] && SEED_DATA[lang].categories) || []).every((c) =>
+      categoryAliases(lang, c.id).some((id) => categoryIds.has(id))
+    );
+  if (!categoriesPresent('nl') || !categoriesPresent('pl')) {
+    return { intact: false, reason: 'missing-seed-category', pairs: [] };
+  }
+
   const matchesFor = (lang) => {
     const entries = (SEED_DATA[lang] && SEED_DATA[lang].words) || [];
     const byKey = new Map();
     for (const entry of entries) {
+      const allowed = categoryAliases(lang, entry.categoryId);
       const hits = words.filter(
         (w) =>
           wordLanguage(w) === lang &&
-          w.categoryId === entry.categoryId &&
-          (w.word || '').trim().toLowerCase() === entry.word.toLowerCase()
+          allowed.includes(w.categoryId) &&
+          // EXACT text: a re-cased or re-spaced word is an edit, and an edited
+          // word is no longer evidence that this record came from the seed.
+          w.word === entry.word
       );
       byKey.set(entry.key, hits);
     }
@@ -169,9 +225,9 @@ export function signaturesMatch(a, b) {
 
 // A read-only view of what the migration WOULD do, and what it cannot decide
 // alone. Pure: computes nothing into the database.
-export function buildAuditPlan(words) {
+export function buildAuditPlan(words, { markers = {}, categories = [] } = {}) {
   const { pairs, ambiguous } = classifyPhotoGroups(words);
-  const cohort = detectSeedCohort(words);
+  const cohort = detectSeedCohort(words, { markers, categories });
 
   // Words already spoken for by an automatic (evidence-backed) pairing.
   const paired = new Set();
@@ -179,10 +235,27 @@ export function buildAuditPlan(words) {
     paired.add(p.nl.id);
     paired.add(p.pl.id);
   }
+
+  // Ambiguous ids must be known BEFORE the cohort is filtered. Previously this
+  // set was built afterwards, so a cohort pair could claim a word that is also
+  // sitting in an ambiguous photo group awaiting the parent's decision — and
+  // the same word could then end up in two proposed pairs. The migration would
+  // hit the unique [conceptId, language] index and abort deterministically, on
+  // the one operation that must be all-or-nothing over her only copy.
+  const ambiguousIds = new Set();
+  for (const g of ambiguous) for (const w of g.words) ambiguousIds.add(w.id);
+
   // Cohort pairs only count once the parent confirms them, but for the summary
-  // we show what they would cover — excluding any word a photo pair already took.
+  // we show what they would cover — excluding any word a photo pair already
+  // took, or that is still contested in an ambiguous group.
   const cohortPairs = cohort.intact
-    ? cohort.pairs.filter((p) => !paired.has(p.nl.id) && !paired.has(p.pl.id))
+    ? cohort.pairs.filter(
+        (p) =>
+          !paired.has(p.nl.id) &&
+          !paired.has(p.pl.id) &&
+          !ambiguousIds.has(p.nl.id) &&
+          !ambiguousIds.has(p.pl.id)
+      )
     : [];
 
   const covered = new Set(paired);
@@ -190,8 +263,6 @@ export function buildAuditPlan(words) {
     covered.add(p.nl.id);
     covered.add(p.pl.id);
   }
-  const ambiguousIds = new Set();
-  for (const g of ambiguous) for (const w of g.words) ambiguousIds.add(w.id);
 
   const untranslated = words.filter((w) => !covered.has(w.id) && !ambiguousIds.has(w.id));
 
@@ -201,19 +272,39 @@ export function buildAuditPlan(words) {
     ambiguous,
     untranslated,
     signature: datasetSignature(words),
+    // Every id already claimed by an automatic or cohort pair. Manual choices
+    // are validated against this so two proposals can never share a word.
+    reservedIds: covered,
     // Legacy words with no stored `language` — the migration must normalise
     // these or the unique index silently won't cover them.
     missingLanguage: words.filter((w) => w.language == null).length,
+    // Explicit but unsupported languages: report, never coerce (see
+    // wordLanguage). The audit must not be saved while any exist.
+    languageIssues: collectLanguageIssues(words),
   };
 }
 
-// Is a parent-chosen pairing legal? (Exactly one word per language, both real,
-// neither already spoken for.)
-export function validateManualPair(nlWord, plWord) {
+// Is a parent-chosen pairing legal? Exactly one Dutch word and one Polish word,
+// both real, and NEITHER already spoken for.
+//
+// `reservedIds` is the set of ids already claimed — by automatic pairs, by the
+// confirmed cohort, and by manual pairs accepted earlier in this same audit.
+// The "neither already spoken for" rule was previously only a comment: nothing
+// enforced it, so the audit could save one word into two pairs.
+export function validateManualPair(nlWord, plWord, reservedIds = new Set()) {
   if (!nlWord || !plWord) return 'Pick one Dutch word and one Polish word.';
-  if (wordLanguage(nlWord) === wordLanguage(plWord)) {
+  const nlLang = wordLanguage(nlWord);
+  const plLang = wordLanguage(plWord);
+  if (nlLang === null || plLang === null) {
+    return 'One of these words has a language this app does not recognise — it needs fixing first.';
+  }
+  // Explicitly one of each, rather than merely "different".
+  if (nlLang !== 'nl' || plLang !== 'pl') {
     return 'A pair must be one Dutch word and one Polish word.';
   }
   if (nlWord.id === plWord.id) return 'A word cannot be paired with itself.';
+  if (reservedIds.has(nlWord.id) || reservedIds.has(plWord.id)) {
+    return 'One of these words is already part of another pair.';
+  }
   return null;
 }

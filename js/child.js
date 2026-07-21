@@ -1,8 +1,8 @@
-import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=43';
-import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=43';
-import { el, onTap } from './dom.js?v=43';
-import { startSession } from './session.js?v=43';
-import { mountParentGate } from './gate.js?v=43';
+import { getAll, voicesForCategoryFrom, attachPhotos, LANGUAGES } from './db.js?v=44';
+import { unlockAudio, playBlobSequence, stopPlayback } from './media.js?v=44';
+import { el, onTap } from './dom.js?v=44';
+import { startSession } from './session.js?v=44';
+import { mountParentGate } from './gate.js?v=44';
 
 // Child-first flow (reordered 19 July 2026 per parent request):
 // Play → flag → language intro with collage of all speakers ("Nederlands!"

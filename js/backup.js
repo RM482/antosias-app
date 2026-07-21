@@ -1,5 +1,5 @@
-import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=43';
-import { canDecodeAudio } from './media.js?v=43';
+import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=44';
+import { canDecodeAudio } from './media.js?v=44';
 
 // Import order is strict: (1) validate the whole file, (2) decode every
 // photo/audio back into Blobs, (3) only then write — in a single
@@ -151,28 +151,80 @@ const isUsableCategory = (c) => c && typeof c.id === 'string' && typeof c.name =
 const isUsableWord = (w) =>
   w && typeof w.id === 'string' && typeof w.word === 'string' && typeof w.categoryId === 'string' && w.categoryId !== '';
 
-// Existing records with the same id are overwritten; everything else is left
-// alone (merge-by-id). Unusable individual records are skipped and counted;
-// all usable records are written together in one all-or-nothing transaction.
-// Returns a summary so callers can tell the user what happened.
-export async function importPayload(payload) {
-  assertStructurallyValid(payload);
+// How a record identifies itself in the omission report. Falls back to the
+// store + position so a row with no id and no name is still nameable — "we
+// dropped something, somewhere" is exactly the report this fix exists to stop.
+function rowIdentity(store, row, index) {
+  const id = row && typeof row.id === 'string' && row.id ? row.id : null;
+  const label =
+    row && typeof row.word === 'string' && row.word
+      ? row.word
+      : row && typeof row.name === 'string' && row.name
+        ? row.name
+        : null;
+  if (id && label) return `${label} (${id})`;
+  return id || label || `${store}[${index}]`;
+}
 
-  const categories = payload.categories.filter(isUsableCategory);
-  const usableWords = payload.words.filter(isUsableWord);
+// Splits "what would this file do" from "do it", so the parent can be shown
+// exactly what is unusable BEFORE anything is written.
+//
+// Previously these rows were filtered away and only categories and words were
+// even counted, so a damaged photo, person or recording vanished from an
+// apparently successful restore without ever being mentioned. Silent loss in
+// the one mechanism that exists to recover from loss.
+//
+// Pure and synchronous: no decoding, no database access. Returns the usable
+// rows plus an itemised list of everything omitted and why.
+export function analyzeImportPayload(payload) {
+  assertStructurallyValid(payload);
+  const omitted = [];
+
+  const keep = (store, rows, isUsable, reason) =>
+    (rows || []).filter((row, index) => {
+      if (isUsable(row)) return true;
+      omitted.push({ store, index, identity: rowIdentity(store, row, index), reason });
+      return false;
+    });
+
+  const categories = keep('categories', payload.categories, isUsableCategory, 'missing an id or a name');
+  const words = keep('words', payload.words, isUsableWord, 'missing an id, its text, or its category');
   // photos is absent in v1 files; each entry needs an id and image data.
-  const usablePhotos = (payload.photos || []).filter(
-    (p) => p && typeof p.id === 'string' && typeof p.blob === 'string'
+  const photos = keep(
+    'photos',
+    payload.photos,
+    (p) => p && typeof p.id === 'string' && typeof p.blob === 'string',
+    'missing an id or its image data'
   );
   // people/recordings are absent in v1/v2 files.
-  const usablePeople = (payload.people || []).filter(
-    (p) => p && typeof p.id === 'string' && typeof p.name === 'string'
+  const people = keep(
+    'people',
+    payload.people,
+    (p) => p && typeof p.id === 'string' && typeof p.name === 'string',
+    'missing an id or a name'
   );
-  const usableRecordings = (payload.recordings || []).filter(
-    (r) => r && typeof r.id === 'string' && typeof r.personId === 'string'
+  const recordings = keep(
+    'recordings',
+    payload.recordings,
+    (r) => r && typeof r.id === 'string' && typeof r.personId === 'string',
+    'missing an id or the person it belongs to'
   );
-  const skipped =
-    (payload.categories.length - categories.length) + (payload.words.length - usableWords.length);
+
+  return { usable: { categories, words, photos, people, recordings }, omitted };
+}
+
+// Decodes every photo/audio back into Blobs and writes them in ONE
+// all-or-nothing transaction. Decoding happens first and outside the
+// transaction (see the header note), so a decode failure aborts with zero
+// writes rather than leaving a half-restored database.
+export async function applyImportPayload(analysis) {
+  const {
+    categories,
+    words: usableWords,
+    photos: usablePhotos,
+    people: usablePeople,
+    recordings: usableRecordings,
+  } = analysis.usable;
 
   const words = await Promise.all(
     usableWords.map(async (w) => ({
@@ -205,10 +257,31 @@ export async function importPayload(payload) {
   return {
     categories: categories.length,
     words: words.length,
+    photos: photos.length,
     people: people.length,
     recordings: recordings.length,
-    skipped,
+    omitted: analysis.omitted,
+    skipped: analysis.omitted.length,
   };
+}
+
+// Existing records with the same id are overwritten; everything else is left
+// alone (merge-by-id).
+//
+// REFUSES by default when any record would be omitted: a caller that cannot
+// show the parent what is being dropped must not drop anything. The restore
+// screen analyses first, lists the omissions, and only then calls this with
+// `allowOmissions` after an explicit confirmation.
+export async function importPayload(payload, { allowOmissions = false } = {}) {
+  const analysis = analyzeImportPayload(payload);
+  if (analysis.omitted.length > 0 && !allowOmissions) {
+    const names = analysis.omitted.slice(0, 5).map((o) => `${o.store}: ${o.identity}`).join(', ');
+    const more = analysis.omitted.length > 5 ? `, and ${analysis.omitted.length - 5} more` : '';
+    throw new Error(
+      `This file has ${analysis.omitted.length} unusable entr${analysis.omitted.length === 1 ? 'y' : 'ies'} (${names}${more}). Nothing was imported.`
+    );
+  }
+  return applyImportPayload(analysis);
 }
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public

@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=43';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=43';
-import { startSession, initSession, showStickerBook } from './session.js?v=43';
-import { startChildMode } from './child.js?v=43';
-import { el } from './dom.js?v=43';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=43';
-import { exportAndShare, importFromGist, importPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=43';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=44';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=44';
+import { startSession, initSession, showStickerBook } from './session.js?v=44';
+import { startChildMode } from './child.js?v=44';
+import { el } from './dom.js?v=44';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=44';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=44';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -450,8 +450,25 @@ async function renderCategories() {
       } catch {
         throw new Error('That file is not readable — make sure it is an export from this app.');
       }
-      const result = await importPayload(payload);
-      const skippedNote = result.skipped ? ` (${result.skipped} unusable entr${result.skipped === 1 ? 'y' : 'ies'} skipped)` : '';
+      // Analyse before writing: if anything in the file is unusable the parent
+      // is told exactly what, by name, and decides. Declining writes nothing.
+      // (Damaged photos, people and recordings used to be dropped silently —
+      // they were not even counted.)
+      const analysis = analyzeImportPayload(payload);
+      if (analysis.omitted.length > 0) {
+        const lines = analysis.omitted
+          .slice(0, 12)
+          .map((o) => `• ${o.store}: ${o.identity} — ${o.reason}`)
+          .join('\n');
+        const more =
+          analysis.omitted.length > 12 ? `\n…and ${analysis.omitted.length - 12} more.` : '';
+        const proceed = confirm(
+          `${analysis.omitted.length} entr${analysis.omitted.length === 1 ? 'y is' : 'ies are'} damaged and cannot be restored:\n\n${lines}${more}\n\nRestore everything else? (Nothing has been changed yet. Keep this backup file either way — a newer version of the app may be able to read more of it.)`
+        );
+        if (!proceed) return;
+      }
+      const result = await applyImportPayload(analysis);
+      const skippedNote = result.skipped ? ` (${result.skipped} damaged entr${result.skipped === 1 ? 'y' : 'ies'} could not be restored)` : '';
       const peopleNote = result.people || result.recordings
         ? `, ${result.people} ${result.people === 1 ? 'person' : 'people'} and ${result.recordings} voice recording${result.recordings === 1 ? '' : 's'}`
         : '';
@@ -1501,7 +1518,12 @@ async function renderSettings() {
       text: 'Right now a Dutch word and its Polish word are only linked if they share the same picture — so a word without a photo can’t be translated at all. This prepares the fix: it works out which words belong together, and asks you about anything it can’t be sure of.',
     }),
   ];
-  if (audit && audit.ready) {
+  // Decisions made by the OLD planner can't be trusted: it didn't check the
+  // seed marker, could put one word in two pairs, and silently read an
+  // unrecognised language as Dutch. They have to be made again.
+  const auditStale = !!(audit && audit.ready && (audit.auditVersion ?? 1) < 2);
+  const auditUsable = !!(audit && audit.ready && !auditStale);
+  if (auditUsable) {
     linkChildren.push(
       el('p', {
         class: 'settings-line',
@@ -1510,11 +1532,20 @@ async function renderSettings() {
         } pair(s) confirmed.`,
       })
     );
+  } else if (auditStale) {
+    linkChildren.push(
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text: `Your earlier answers (from ${formatBackupDate(
+          audit.createdAt
+        )}) were worked out by a version that could get some pairs wrong, so they’ve been set aside. Nothing was changed to your words — please go through this once more.`,
+      })
+    );
   }
   linkChildren.push(
     el('button', {
       class: 'btn-secondary',
-      text: audit && audit.ready ? '🔗 Review translation linking' : '🔗 Prepare translation linking',
+      text: auditUsable ? '🔗 Review translation linking' : '🔗 Prepare translation linking',
       style: 'width:100%;',
       onclick: () => push({ screen: 'twinAudit', openedAt: Date.now() }),
     })
@@ -2255,9 +2286,20 @@ async function renderQuickRecord(view) {
 // decision on anything that isn't backed by evidence, and stores those decisions
 // (by word id, with a dataset signature) for the migration to revalidate later.
 async function renderTwinAudit(view) {
-  const [allWords, settings] = await Promise.all([getAll('words'), getSettings()]);
+  const [allWords, settings, allCategories, seedNl, seedPl] = await Promise.all([
+    getAll('words'),
+    getSettings(),
+    getAll('categories'),
+    get('meta', 'seed:nl:v1').catch(() => null),
+    get('meta', 'seed:pl:v1').catch(() => null),
+  ]);
   await attachPhotos(allWords);
-  const plan = buildAuditPlan(allWords);
+  // The seed markers and categories are read HERE and passed in, so the planner
+  // stays pure and synchronous (it has to run inside a versionchange later).
+  const plan = buildAuditPlan(allWords, {
+    markers: { 'seed:nl:v1': !!seedNl, 'seed:pl:v1': !!seedPl },
+    categories: allCategories,
+  });
   const byId = new Map(allWords.map((w) => [w.id, w]));
 
   // Decisions live on the view so a re-render doesn't lose them.
@@ -2338,6 +2380,21 @@ async function renderTwinAudit(view) {
       el('p', {
         class: 'settings-note',
         text: `${plan.missingLanguage} older word(s) don’t record which language they are. The update will mark them as Dutch.`,
+      })
+    );
+  }
+  // An explicit but unrecognised language is a different thing entirely from a
+  // missing one: it can't be guessed, so it's reported and it blocks saving.
+  // Silently treating it as Dutch would have let the migration relabel it
+  // permanently.
+  if (plan.languageIssues.length > 0) {
+    autoChildren.push(
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text: `${plan.languageIssues.length} word(s) have a language this app doesn’t recognise (${plan.languageIssues
+          .slice(0, 3)
+          .map((i) => `“${i.word || i.id}” = ${JSON.stringify(i.language)}`)
+          .join(', ')}${plan.languageIssues.length > 3 ? ', …' : ''}). These need fixing before linking can be saved — nothing here will guess for them.`,
       })
     );
   }
@@ -2441,21 +2498,36 @@ async function renderTwinAudit(view) {
       el('p', { class: 'settings-note settings-note-warn', text: 'Save a backup above first.' })
     );
   }
+  if (plan.languageIssues.length > 0) {
+    saveChildren.push(
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text: 'Some words have an unrecognised language (see above). Fix those first — saving is blocked until then.',
+      })
+    );
+  }
   const saveBtn = el('button', {
     text: 'Save my answers',
     style: 'width:100%;',
     onclick: async () => {
       // Only keep a manual pair when BOTH sides were picked and it is legal.
+      // Validation runs against the COMBINED set: ids already claimed by an
+      // automatic or cohort pair, plus every manual pair accepted so far in
+      // this loop. Without that, two proposals could share a word and the
+      // migration would abort on the unique index.
+      const reserved = new Set(plan.reservedIds);
       const manualPairs = [];
       for (const [photoId, choice] of Object.entries(decisions.manualPairs)) {
         if (!choice.nlId || !choice.plId) continue; // half-picked = leave separate
         const nlWord = byId.get(choice.nlId);
         const plWord = byId.get(choice.plId);
-        const problem = validateManualPair(nlWord, plWord);
+        const problem = validateManualPair(nlWord, plWord, reserved);
         if (problem) {
           alert(`That pairing isn’t valid: ${problem}`);
           return;
         }
+        reserved.add(nlWord.id);
+        reserved.add(plWord.id);
         manualPairs.push([nlWord.id, plWord.id]);
       }
       const cohortPairs =
@@ -2466,7 +2538,10 @@ async function renderTwinAudit(view) {
         await put('meta', {
           key: 'twinAudit',
           value: {
-            auditVersion: 1,
+            // v2: the planner was repaired (seed-marker evidence, no word in
+            // two pairs, no silent language coercion). Decisions saved by the
+            // older planner are not trustworthy and must be re-made.
+            auditVersion: 2,
             createdAt: Date.now(),
             backupAt: (await getSettings()).lastBackupAt ?? null,
             // The migration must refuse to act on these decisions if the data
@@ -2488,7 +2563,7 @@ async function renderTwinAudit(view) {
       pop();
     },
   });
-  saveBtn.disabled = !backupFresh;
+  saveBtn.disabled = !backupFresh || plan.languageIssues.length > 0;
   saveChildren.push(saveBtn);
   screen.appendChild(card('5. Save', saveChildren));
 
@@ -3132,7 +3207,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=43');
+    const { startRecordingPage } = await import('./record.js?v=44');
     startRecordingPage(recordGistId);
     return;
   }

@@ -322,10 +322,25 @@ Also required:
 
   **Old-format derivation rules (v1–v4), stated as an algorithm:**
   1. Overwriting a word by identical id **preserves the existing `conceptId`** — a
-     restore of an old file must never strip a concept the device already has.
+     restore of an old file must never strip a concept the device already has. A
+     `conceptId` *supplied* on an old-format row is **ignored** (v1–v4 predate the
+     field, so its presence means a hand-edited or mislabelled file); a supplied
+     `conceptId` on a **new** id is likewise ignored, never trusted.
   2. The **only** evidence that may create a *new* relationship is Rule A applied to
      the complete post-merge set: a `photoId` shared by exactly one Dutch and exactly
-     one Polish word. Name matches create nothing (§4).
+     one Polish word. Name matches create nothing (§4). **Decision table for a
+     Rule-A candidate pair, by how many of the two words already hold a concept:**
+
+     | Existing concepts | Outcome |
+     |---|---|
+     | **Zero** | Mint one fresh `conceptId` and assign it to both |
+     | **One** | The word without one **joins** the existing concept |
+     | **Two, identical** | Already linked — no change |
+     | **Two, different** | **Genuine collision → zero writes, report to the parent.** Never merge two established concepts automatically; each may hold a twin the other cannot absorb |
+
+     After the table is applied, **every remaining word without a concept gets a
+     fresh single-member one**, and only then is the complete proposed set
+     validated against the unique `[conceptId, language]` invariant.
   3. A **restored `twinAudit` may not be used as evidence.** It is stored
      `ready: false`, and "historical" has to mean non-actionable or the flag is
      decorative.

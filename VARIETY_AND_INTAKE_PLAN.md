@@ -161,17 +161,44 @@ with no checks (`js/backup.js:177-202`), so zero-byte or unplayable audio restor
 that every image decodes. Include a **per-Blob SHA-256 manifest**, which also
 catches corruption that still parses as valid JSON.
 
-**C-P7 — export reads store-at-a-time with cursors and releases rows promptly.**
-v3's "encode sequentially" (round 2's C-P9) does not solve peak memory: `getAll()`
-still loads every Blob, and the payload is then held as base64 strings *plus* a
-giant JSON string *plus* a Blob *plus* a File (`js/backup.js:88-107`).
+**C-P7 — export runs in two phases, because hashing cannot happen inside the
+transaction.** Round 5 caught that v4's C-P7 and C-P8 were not jointly
+implementable: encoding, decoding and SHA-256 are all **async non-IDB work**, and
+awaiting any of them inside an IndexedDB transaction auto-commits it — a
+restriction this codebase already documents (`js/backup.js:4`). "Cursor through
+one transaction, releasing rows promptly, while hashing each row" is therefore
+impossible. The workable pipeline:
 
-**C-P8 — the whole export reads inside ONE readonly transaction spanning every
-store.** Round 4 asked how a consistent snapshot survives store-at-a-time reads;
-this is the answer — IndexedDB guarantees a consistent view within a transaction,
-so cursoring all stores in one readonly transaction gives both low peak memory and
-a coherent snapshot. Without it, a save landing mid-export could produce a backup
-whose digest matches nothing that ever existed.
+1. **Phase 1 (inside one readonly transaction spanning every store):** cursor
+   through and build a coherent logical snapshot — all scalar fields copied, Blob
+   **handles** retained. No non-IDB `await` anywhere inside. IndexedDB guarantees
+   a consistent view within a transaction, so this is the snapshot's coherence
+   guarantee; without it a save landing mid-export could produce a backup whose
+   digest matches nothing that ever existed.
+2. **Phase 2 (after the transaction has completed):** validate, hash and encode
+   **one Blob at a time**, releasing each raw reference as it is consumed.
+
+**Stated honestly:** raw Blob handles are held for the duration of phase 1. That
+is the real memory floor, and C-P9's ceiling must be measured against it — the
+claim is *bounded* peak memory, not *low* peak memory.
+
+**C-P8 — the canonical digest, defined exactly.** "Canonical" was hand-waving in
+v4. The digest must specify:
+
+- **Ordering:** stores in a fixed listed order; records within a store sorted by
+  `id`; object keys sorted lexicographically; array order preserved as-is (it is
+  meaningful for `extraPhotoIds`).
+- **Coverage:** all non-media scalar data too — a per-Blob manifest alone cannot
+  detect a renamed word or a re-pointed category, which is exactly what the
+  Release 2 gate must catch.
+- **Per Blob:** SHA-256 of the bytes, plus size and MIME type.
+- **Absent vs null:** normalised to one representation and documented, so a field
+  that is missing on one device and `null` on another does not read as a change.
+- **Excluded:** `lastBackupAt` and any verification receipt (C-P5) — otherwise
+  verifying a backup would immediately invalidate its own digest.
+- **Comparison:** an exact canonical tuple comparison, not another 32-bit hash
+  like the shipped `datasetSignature` (`js/concepts.js:153`), whose collision
+  margin is far too thin to gate a destructive migration.
 
 **C-P9 — single-file export with a measured ceiling; chunking is NOT specified.**
 Test at a minimum of twice the expected real library size on the iPhone. If a
@@ -253,11 +280,18 @@ backup would come back alongside the current array. The rules:
 
 - A restore **ignores** any legacy `phrase-*` value when the payload also carries
   the matching `phrase-v2-*` array.
-- From a **v3-era file** (legacy key only, no array), the bare Blob is imported as
-  **one variant** with a stable derived id, then merged by the union rule above —
-  so importing the same old backup twice cannot produce two copies.
-- After every merge, the legacy shadow is **regenerated from the resulting array**
-  inside the same transaction (C-A1); it is an output, never an input.
+- From a **v4 legacy-only file** — a v4 backup written before Feature A shipped,
+  so it carries `meta` with the legacy key but no array — the bare Blob is
+  imported as **one variant**, then merged by the union rule above. (v4 defines
+  the first format carrying `meta` at all, so a v3 file cannot contain a phrase
+  key; v4's "v3-era file" wording was wrong.)
+- **The derived id is `pv:legacy:<name>:<sha256 of MIME type + bytes>`.** It must
+  be content-derived, not random, or importing the same old backup twice would
+  produce two copies of one clip.
+- After every merge, the legacy shadow **and its digest** are regenerated from the
+  resulting array inside the same transaction (C-A1/C-A2); they are outputs, never
+  inputs. The digest is **regenerated on import, never exported** — a digest
+  travelling in a file would describe a shadow the receiving device does not have.
 
 **C-P13 — referential validation of the complete proposed post-merge set.**
 Promoted from "deferred" (v3 §4.4) because a *verified* backup is about to gate a
@@ -356,9 +390,12 @@ renamePhraseVariant(language, name, variantId, label)
 normalisation on read: a bare Blob becomes `[{ id: 'legacy', blob, label: '' }]`.
 
 **C-A2 — add, remove AND rename each run as ONE readwrite transaction** containing
-the read, the mutation, the v2 write and the legacy-shadow write. A `get` → mutate
-→ `put` across two transactions can silently drop a just-recorded clip. No non-IDB
-`await` inside.
+the read, the mutation, the v2 write, the legacy-shadow write **and the shadow
+digest write** (round 5: v4 listed only the two phrase values, so the digest could
+drift out of step with the shadow it describes). A `get` → mutate → `put` across
+two transactions can silently drop a just-recorded clip. No non-IDB `await`
+inside — which means the digest must be computed *before* the transaction opens,
+from the bytes already in hand.
 
 **C-A3 — every call site of the old flat shape is updated in the same change** —
 `js/session.js:140`, `js/admin.js:1371`.
@@ -795,11 +832,15 @@ function directly rather than sampling "~20 questions", which makes results flak
   rejected combination**: v1, v2, legacy kind-less v3, `3+share`, `4+backup`,
   `5+backup`, `5+share`; refusal of `4+share`, of v5 with a missing or unknown
   kind, of a share payload carrying `meta`, and of an unknown version.
-- **Backup, duplicate and legacy-shadow handling (round 4):** duplicate word ids
-  and duplicate `meta` keys within one payload are rejected (C-P15); importing the
-  **same v3-era file twice** yields one variant, not two; a payload carrying both a
-  legacy key and a `phrase-v2-*` array ignores the legacy key; a deleted variant is
-  not resurrected by an older backup's shadow (C-P12).
+- **Backup, duplicate handling (C-P15)** — parameterised over **every id-bearing
+  section**, not just words: duplicate ids within `categories`, `words`, `photos`,
+  `people` and `recordings` are each rejected, as are duplicate `meta` keys. Round
+  5 caught that all five stores use overwrite-by-key `put()` (`js/db.js:103`), so
+  testing words alone would leave four silent-overwrite paths unproven.
+- **Backup, legacy-shadow handling:** importing the **same v4 legacy-only file
+  twice** yields one variant, not two (the derived id is content-based); a payload
+  carrying both a legacy key and a `phrase-v2-*` array ignores the legacy key; a
+  deleted variant is not resurrected by an older backup's shadow (C-P12).
 - **Feature A:** a legacy bare Blob still plays; a stale v43 reader still finds a
   playable Blob on the legacy key after variants exist; deleting the last variant
   removes the shadow; a legacy value changed by an out-of-date client is **surfaced

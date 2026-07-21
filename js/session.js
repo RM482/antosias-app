@@ -12,11 +12,11 @@ import {
   SRS_INTERVAL_DAYS,
   nextReviewAfterDays,
   attachPhotos,
-} from './db.js?v=43';
-import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=43';
-import { el, shuffle, onTap } from './dom.js?v=43';
-import { mountParentGate } from './gate.js?v=43';
-import { confettiBurst, confettiBurstAt } from './confetti.js?v=43';
+} from './db.js?v=44';
+import { playBlobSequence, stopPlayback, unlockAudio } from './media.js?v=44';
+import { el, shuffle, onTap } from './dom.js?v=44';
+import { mountParentGate } from './gate.js?v=44';
+import { confettiBurst, confettiBurstAt } from './confetti.js?v=44';
 
 const sessionEl = document.getElementById('session');
 const appEl = document.getElementById('app');
