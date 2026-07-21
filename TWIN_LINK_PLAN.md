@@ -194,6 +194,11 @@ leaving a window in which ordinary use can create invalid data.
    manual set before anything is stored.
 
 **Release 2 — Migrate and enforce (ONE `versionchange` transaction).**
+*(Amended 21 July 2026: this migration takes IndexedDB **`DB_VERSION` 5**, not 4.
+`VARIETY_AND_INTAKE_PLAN.md` C-A1 takes v4 for the phrase-variant list — that
+version bump is what removes the stale-client concurrent-writer problem five
+review rounds failed to solve any other way. Export `formatVersion` is a separate
+sequence, unchanged: v4 private backup, v5 concept-aware; see §9.)*
 1. Re-read and **revalidate** every word (and every recorded decision — discard any
    whose word id now points at a different word or language).
 2. Assign every `conceptId`; normalise every `language`.

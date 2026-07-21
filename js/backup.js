@@ -251,7 +251,9 @@ export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
         reason:
           usableCount(better.row) > usableCount(worse.row)
             ? 'a second copy of this same entry in the file; the copy with more of its media was used'
-            : 'a second copy of this same entry in the file; the first one was used',
+            : damagedFields(store, better.row).length < damagedFields(store, worse.row).length
+              ? 'a second copy of this same entry in the file; the less damaged copy was used'
+              : 'a second copy of this same entry in the file; the first one was used',
       });
     }
 
@@ -370,12 +372,13 @@ export async function applyImportPayload(analysis) {
   // correctly left alone — so it was not repaired, it was skipped. Reporting it
   // as "came back without its recording" would be false.
   const lateSkips = new Set(guardedSkips.map((k) => `${k.store}:${k.id}`));
+  const lateByStore = (store) => guardedSkips.filter((k) => k.store === store).length;
   return {
-    categories: categories.length,
-    words: words.length,
-    photos: photos.length,
-    people: people.length,
-    recordings: recordings.length,
+    categories: categories.length - lateByStore('categories'),
+    words: words.length - lateByStore('words'),
+    photos: photos.length - lateByStore('photos'),
+    people: people.length - lateByStore('people'),
+    recordings: recordings.length - lateByStore('recordings'),
     omitted: analysis.omitted,
     // Only rows that were genuinely NOT written count as skipped. A repaired
     // row (restored without its damaged clip) and a duplicate that lost to a

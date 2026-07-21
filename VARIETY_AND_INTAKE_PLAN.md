@@ -286,8 +286,14 @@ differs from. The parent sees the count and the affected names, exactly like the
 omission report, and confirms. Silence is the thing being removed, not the merge
 semantics.
 
-(v44 already widened the warning text to name photos, recordings and people; the
-itemised conflict report is step 1's work.)
+**The conflict check must also be re-applied INSIDE the write transaction**, the
+same rule `skipIfPresent` already implements in code (`js/db.js:103`): a record
+appearing between the report and the write must not be silently overwritten. A
+late conflict is skipped and reported afterwards, never written through.
+
+(v44 already widened the warning text to name photos, recordings and people, and
+implemented the in-transaction re-check for repaired rows; the itemised conflict
+report is step 1's work.)
 
 **C-P11 — a malformed blob-bearing record ABORTS the restore.** Any malformed word,
 photo, person, recording or allowlisted `meta` record stops the restore before any
@@ -302,27 +308,28 @@ Required behaviour:
 
 | Key | Merge rule |
 |---|---|
-| `phrase-<name>` (variant one) | Restore only when the phone has **no** clip in that slot. An existing recording is never replaced by a backup's — see below. |
-| `phrase-extra-<name>` | **Union by variant id; the current value wins on conflicting ids.** |
+| `phrase-<name>` (the variant list) | **Union by variant id; the current value wins on conflicting ids.** |
 | `stickers` | Union by identity, never replace. |
 | `settings` | Explicit fields only; never `lastBackupAt` or a verification receipt. |
 | `twinAudit` | Invalidated by every restore; never replace a current ready audit with an older "ready" one. |
 | intake ledger | Current item wins; never resurrect an item whose allocated word ids already exist; recompute the header from surviving items. |
 
-**Why variant one is never overwritten by a restore.** It is a bare Blob with no
-id, so there is no way to tell "the same clip, restored" from "a different clip
-recorded since". Overwriting would silently destroy the newer recording;
-skipping, at worst, leaves her with the clip she already has and the backup's
-copy unused. It is reported like any other conflict (C-P10a), so she can hear
-both and decide. Restoring into an **empty** slot is unambiguous and always
-happens — which is the wipe-recovery case that matters.
+Variants all carry ids after C-A1a, so the union rule is uniform and importing
+the same file twice cannot duplicate a clip.
 
-Variants two onward carry ids, so they merge cleanly by union.
+**C-P12a — restoring an old backup DOES bring back things deleted since it was
+made. That is accepted and stated, not engineered away.** Round 10 raised this
+for phrase variants, but it is not phrase-specific: merge-by-id restore has
+always re-added words, photos and people deleted after the backup was taken, and
+that is what "restore" means to the person doing it. The alternative — tombstones
+recording every deletion, exported and honoured on import — is a large mechanism
+whose only purpose is to make a recovery feature recover *less*.
 
-**C-P12a — importing the same file twice must not duplicate a clip.** Extra
-variants have stable ids, so union handles it. For a **v4 legacy-only file** (a
-backup written before Feature A shipped, carrying only the bare legacy key) there
-is no id, which is exactly why such a file only ever lands in an empty slot.
+So: no tombstones. Instead the conflict report (C-P10a) names what the file will
+bring back that is not currently here, so she sees "this will also restore 3
+things you deleted" **before** confirming, and can decline. The bias stays
+"prefer the recording that exists over the one in the file" for conflicts, and
+"restore it" for anything absent.
 
 **C-P13 — referential validation of the complete proposed post-merge set.**
 Promoted from "deferred" (v3 §4.4) because a *verified* backup is about to gate a
@@ -389,43 +396,51 @@ network is unavailable (`sw.js:19`, `:28`), so a v43 client can return at any ti
 — and once an array is written to the old key, that client returns the array and
 `decodeBlob` calls `.arrayBuffer()` on it (`js/media.js:221`) and throws.
 
-**C-A1 — the legacy key IS variant one. There is no shadow, and no copy.**
+**C-A1 — Feature A takes a database version bump, which removes the concurrent
+writer entirely.**
 
-Rounds 4 through 9 each patched a "shadow" design in which the legacy key held a
-*duplicate* of the first variant: a digest to detect tampering, then a CAS check,
-then an optimistic retry, then additive normalisation. Round 9 broke the fourth
-version too — stale detection has to hash outside a transaction, so a take
-written after detection but before the write is still overwritten. Four failed
-patches is the design telling us it is wrong: **any scheme where two code
-generations write the same key can lose a write.**
+Rounds 4 through 10 all failed on the same thing, and round 10 said so plainly:
+*"still circling the previously identified data-loss classes."* Five designs were
+tried — a digest, a CAS check, an optimistic retry, additive normalisation, and
+finally making the legacy key BE variant one — and every one of them loses a
+write, because all of them accept the same premise: **that a cached v43 client
+may keep writing while v44+ writes too.** Round 10's trace is decisive: a stale
+Settings screen holds a snapshot and its "Save phrases" rewrites *every* slot it
+snapshotted (`js/admin.js:1648`), so it can resurrect a deleted clip and destroy
+a newer one no matter how the data is shaped. No storage layout fixes stale
+intent.
 
-So the duplicate is removed:
+The premise was self-imposed. v3 of this plan forbade a `versionchange` for
+Feature A so DB v4 stayed reserved for `TWIN_LINK_PLAN.md` Release 2 — and that
+single constraint is what forced five rounds of increasingly elaborate
+workarounds.
 
-| Key | Holds | Written by |
-|---|---|---|
-| `phrase-<name>` (existing) | **Variant one, as a plain Blob** — exactly today's format | both generations |
-| `phrase-extra-<name>` (new) | Variants two onward, plus labels | new code only |
+**Decision: Feature A opens the database at v4. Release 2 becomes v5.** Version
+numbers are free; there is no reason the migration needs *that* integer. The
+consequences are all good:
 
-`getStandardPhrases` reads both and concatenates. Consequences, all good:
+- **A cached v43 client cannot open a v4 database at all** — `indexedDB.open`
+  fails with `VersionError` (`js/db.js:17`). It fails loudly and immediately
+  instead of silently overwriting her recordings. There is no concurrent writer,
+  so there is nothing to detect, reconcile or race.
+- **No shadow, no copy, no digest, no CAS, no normalisation, no per-variant
+  `sha256`.** All of it existed only to survive a writer that can no longer
+  exist. Variants become a plain list under one key, migrated once in the
+  upgrade transaction — pure, synchronous, all-or-nothing, exactly the kind of
+  migration IndexedDB's version mechanism is for.
+- The app **already** requires a force-quit and reopen after every deploy, and
+  the project has **already** accepted forward-only recovery for a version bump
+  (C-S2). This applies that same accepted rule one release earlier.
 
-- **A cached v43 client reads the legacy key and gets a real, playable Blob** —
-  not a copy that could drift, the actual first variant. Nothing to keep in sync.
-- **If a stale client records over it, that take simply becomes variant one** and
-  new code reads it directly. Nothing to detect, nothing to surface, nothing to
-  lose. The entire C-A1 detection machinery, the digest, and the CAS protocol are
-  **deleted**, along with C-A2a's normalisation problem — there is no
-  normalisation, because the legacy format *is* the format.
-- **Deleting variant one** promotes another variant's blob into that key (one
-  write, no hashing); deleting the last one removes the key, which is already
-  today's "nothing recorded" state.
-- **No `sha256` is needed** for any of this. It remains only in §1.4, for making
-  a repeated *import of the same file* idempotent, where the bytes are in hand
-  outside any transaction and hashing is free.
+Cost: the upgrade is irreversible, so a rolled-back build cannot open her
+database. That is exactly the risk Release 2 already carries, and it gets the
+same treatment — **the forward-recovery shell (C-S2) is built and tested before
+this ships, not before Release 2.** It simply moves earlier in the queue.
 
-Cost: variant one's label lives in `phrase-extra-<name>` (a small
-`{ labels: { 1: "Klik op de…" } }` map) rather than beside its blob, because the
-legacy key must stay a bare Blob. That is the whole price, and it buys the
-removal of an entire class of race.
+**C-A1a — the migration itself.** Inside the v3→v4 `versionchange`: for each
+phrase slot holding a bare Blob, write `[{ id, blob, label: '' }]` in its place.
+Pure and synchronous (no hashing, no `await`), one transaction, and it either
+completes or the database stays at v3 with nothing changed.
 
 ### 2.4 API (`js/db.js`)
 
@@ -438,21 +453,19 @@ renamePhraseVariant(language, name, variantId, label)
 
 `saveStandardPhrase()` is replaced; its only caller is `js/admin.js:1601`.
 
-Read assembles the list from both keys: the legacy Blob becomes variant one
-(`{ id: 'v1', blob, label }`, its label read from `phrase-extra-<name>`), followed
-by the extras in order. A slot with only the legacy key — every slot on her phone
-today — yields exactly one variant, which is what it has always been.
+After the C-A1a upgrade every slot holds a variant list, so reads need no
+per-shape branching at all — the defensive "a bare Blob becomes one variant"
+fallback stays only as a belt-and-braces guard for a database that somehow
+skipped the migration.
 
-**C-A2 — add, remove AND rename each run as ONE readwrite transaction** over
-both keys (`phrase-<name>` and `phrase-extra-<name>`). A `get` → mutate → `put`
-across two transactions can silently drop a just-recorded clip. No non-IDB
-`await` inside — and with C-A1's design there is nothing to hash in there, so
-that constraint is trivially satisfiable rather than circular.
+**C-A2 — add, remove AND rename each run as ONE readwrite transaction** over the
+slot's variant list. A `get` → mutate → `put` across two transactions can
+silently drop a just-recorded clip. No non-IDB `await` inside — trivially
+satisfiable now that there is nothing to hash there.
 
-**C-A2a — there is no normalisation step.** Every phone already stores exactly
-what variant one is meant to be: a bare Blob under the legacy key. Nothing is
-migrated, rewritten or hashed on upgrade; adding a second variant simply creates
-`phrase-extra-<name>` alongside it. A slot she never touches is never written.
+**C-A2a — deleted after this version bump, along with the problem it addressed.**
+There is no normalisation step at read time and no legacy key to reconcile: the
+one-off conversion happens in the C-A1a upgrade transaction.
 
 **C-A3 — every call site of the old flat shape is updated in the same change** —
 `js/session.js:140`, `js/admin.js:1371`.
@@ -873,20 +886,22 @@ the `?v=N` number gets assigned when each release actually ships.
    different things: photo forking stops irreversible picture replacement *today*
    (`js/db.js:227-244`), while the audit repairs protect the later migration.
 3. **Photo Inbox** (concept-neutral, with C-B20).
-4. **Feature A** — ships independently any time **after step 1**, since step 1's
-   codec and merge tests must already cover both the bare and variant phrase
-   forms. Otherwise it touches nothing the migration cares about; slot it wherever
-   suits her.
+4. **Feature A** — after step 1 (whose codec and merge tests must already cover
+   the variant list), and it now carries the **DB v4 bump plus the
+   forward-recovery shell** (C-A1/C-S2). That shell is a prerequisite for
+   Release 2 anyway, so building it here means the riskiest release later inherits
+   an already-tested recovery path rather than a freshly written one.
 5. **Release 2, alone.** Re-run the audit over the new words, verify a current
    backup (C-P14), then migrate. **C-S1: nothing else ships in that release** —
    its own plan requires a migration-failure screen because a deterministic
    upgrade failure would otherwise brick every launch (`TWIN_LINK_PLAN.md`).
 6. **Bilingual/adoption completion of Feature B** (§3.7, C-B16/C-B17).
 
-**C-S2 — rollback past DB v4 is unsupported and must be stated before deploying.**
-Once the database is at v4, v43 code calling `indexedDB.open(name, 3)`
-(`js/db.js:17`) fails with `VersionError`. Recovery is **forward-only**: a fixed
-v47+ shell, built and tested *before* the migration deploys.
+**C-S2 — rollback past a version bump is unsupported, and this now applies from
+Feature A onward, not just at Release 2.** Once the database is at v4, v43 code
+calling `indexedDB.open(name, 3)` (`js/db.js:17`) fails with `VersionError`.
+Recovery is **forward-only**: a fixed shell, built and tested *before* the first
+version bump ships. Feature A takes v4 (C-A1), Release 2 takes v5.
 
 **C-S3 — ordering does not keep the audit valid by itself.** She can add or delete
 a word between any two deployments, so Release 2 must recompute and compare the
@@ -928,16 +943,16 @@ function directly rather than sampling "~20 questions", which makes results flak
   `people` and `recordings` are each rejected, as are duplicate `meta` keys. Round
   5 caught that all five stores use overwrite-by-key `put()` (`js/db.js:103`), so
   testing words alone would leave four silent-overwrite paths unproven.
-- **Backup, phrase merge:** a backup never overwrites an existing variant one
-  (the newer recording survives, and the conflict is reported); it does restore
-  into an empty slot; extra variants union by id, so importing the same file
-  twice yields no duplicates; a deleted extra variant is not resurrected
-  (C-P12/C-P12a).
+- **Backup, phrase merge:** variants union by id, so importing the same file
+  twice yields no duplicates; a conflicting id keeps the CURRENT recording; a
+  clip deleted since the backup IS restored and is **named in the conflict report
+  first** (C-P12/C-P12a); a v3-era database upgraded by C-A1a yields exactly one
+  variant per previously-recorded slot, with the audio intact.
 - **Feature A:** a legacy bare Blob still plays; a stale v43 reader still finds a
-  playable Blob on the legacy key after extra variants exist (C-A1); a clip
-  recorded by an out-of-date client over that key is simply read back as variant
-  one, with nothing lost; deleting variant one promotes another into its place,
-  and deleting the last removes the key; long praise is **not truncated** and
+  playable clip after the upgrade (C-A1a); an out-of-date client cannot open the
+  v4 database at all and fails with VersionError rather than writing; deleting
+  the last variant leaves the slot empty (the app's "nothing recorded" state);
+  long praise is **not truncated** and
   "Hear it again" cannot cancel it (C-A6); an empty take and an interrupted take are
   both rejected (C-A8/C-A9).
 - **Photo Inbox:** atomic photo+ledger enqueue; killed mid-transaction leaves
