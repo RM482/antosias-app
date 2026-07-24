@@ -1,4 +1,4 @@
-import { ensureSeeded, getAll, put, remove } from '../js/db.js?v=46';
+import { ensureSeeded, getAll, put, remove } from '../js/db.js?v=47';
 
 const result = document.getElementById('result');
 const stores = ['categories', 'words', 'photos', 'people', 'recordings', 'meta'];

@@ -9,8 +9,8 @@ import {
   wordLabel,
   wordRecordingId,
   carrierRecordingId,
-} from './db.js?v=46';
-import { canDecodeAudio } from './media.js?v=46';
+} from './db.js?v=47';
+import { canDecodeAudio } from './media.js?v=47';
 
 const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
 const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];
@@ -138,7 +138,19 @@ function filteredMeta(rows) {
 }
 
 function sortedRows(store, rows) {
-  return [...rows].map(withoutRev).sort((a, b) => lexicalCompare(keyFor(store, a), keyFor(store, b)));
+  return [...rows]
+    .map((row) => {
+      const clean = withoutRev(row);
+      if (store === 'words') {
+        // `attachPhotos()` decorates words with display-only Blob copies.
+        // Older edit flows could accidentally persist `extraPhotos`; the
+        // canonical pictures remain in the photos store via extraPhotoIds.
+        // Exclude only that derived cache from backup/share/digest data.
+        delete clean.extraPhotos;
+      }
+      return clean;
+    })
+    .sort((a, b) => lexicalCompare(keyFor(store, a), keyFor(store, b)));
 }
 
 async function encodeRecursive(value, path, manifest) {

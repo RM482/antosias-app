@@ -387,6 +387,10 @@ export async function saveWord(wordDraft) {
   }
   const record = { ...wordDraft };
   delete record.photo; // the blob lives in the photos store, not on the word
+  // `attachPhotos()` adds these Blobs only for display. Persisting them would
+  // duplicate the real photos-store records and make a backup misclassify the
+  // copies as nested audio.
+  delete record.extraPhotos;
   await put('words', record);
   return wordDraft;
 }

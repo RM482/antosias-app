@@ -1,4 +1,4 @@
-import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove } from '../js/db.js?v=46';
+import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove, saveWord } from '../js/db.js?v=47';
 import {
   analyzeImportPayload,
   applyImportPayload,
@@ -6,7 +6,7 @@ import {
   buildSharePayload,
   getBackupVerificationStatus,
   verifyBackupPayload,
-} from '../js/backup.js?v=46';
+} from '../js/backup.js?v=47';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
@@ -96,6 +96,9 @@ async function run() {
     language: 'nl',
     photoId: 'photo-1',
     extraPhotoIds: ['photo-2'],
+    // Reproduces the leaked display cache found on the real iPhone in v46.
+    // The canonical copy is photos/photo-2 and must remain in the backup.
+    extraPhotos: [image],
     audioWord: audio,
   });
   await put('people', {
@@ -141,11 +144,13 @@ async function run() {
   assert(backup.meta.some((row) => row.key === 'photoIntake:item:item-1'), 'private backup includes intake');
   assert(!backup.meta.some((row) => row.key === 'seeded'), 'private backup excludes seed markers');
   assert(!backup.meta.some((row) => row.key === 'migrate:test'), 'private backup excludes migrations');
+  assert(!Object.hasOwn(backup.words[0], 'extraPhotos'), 'backup removes leaked display-only extraPhotos');
   const backedUpSettings = backup.meta.find((row) => row.key === 'settings').value;
   assert(!Object.hasOwn(backedUpSettings, 'lastBackupAt'), 'private backup excludes lastBackupAt');
 
   assert(share.formatVersion === 3 && share.payloadKind === 'share', 'share version/kind');
   assert(!Object.hasOwn(share, 'meta'), 'share contains no private meta');
+  assert(!Object.hasOwn(share.words[0], 'extraPhotos'), 'share removes leaked display-only extraPhotos');
   assert(share.photos.length === 2, 'share contains only word-referenced photos');
   assert(!share.photos.some((photo) => photo.id === 'photo-private'), 'share excludes intake photo');
 
@@ -171,6 +176,8 @@ async function run() {
   assert(restored.words === 1 && restored.photos === 3, 'healthy restore writes the complete set');
   assert((await get('words', 'word-1')).word === 'banana', 'restored word is readable');
   assert((await get('meta', 'phrase-goed-zo')).value instanceof Blob, 'restored phrase is readable');
+  await saveWord({ ...(await get('words', 'word-1')), extraPhotos: [image] });
+  assert(!Object.hasOwn(await get('words', 'word-1'), 'extraPhotos'), 'saveWord never persists display-only extraPhotos');
 
   await verifyBackupPayload(backup);
   assert((await getBackupVerificationStatus()).verified, 'retained backup verifies against current data');

@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — live app `?v=46`
+## Status (as of 24 July 2026) — next release `?v=47`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -26,9 +26,18 @@ setup test” repair and moves all future spike persistence data out of the
 passes 34 assertions with zero console errors; the exact cleanup UI and a
 successful post-cleanup backup build were also driven end to end.
 
-**⏭️ NEXT:** on the phone remove the named setup test, then repeat Save backup →
-Save to Files → Verify backup. Everything else in the plan is specified but NOT
-signed off.
+**v47 READY TO DEPLOY (24 July):** after the old setup test was removed, the
+real-iPhone backup exposed a display-only `extraPhotos` Blob accidentally saved
+inside one word by an older edit flow. Its canonical picture remains safely in
+the `photos` store and is referenced by `extraPhotoIds`. v47 strips that derived
+cache from all future `saveWord` writes and normalises it out of private backup,
+family share and verification digests. The real photo-store record remains in
+the payload. The full browser suite passes 37 assertions with zero warnings or
+errors, including the exact leaked-cache shape, restore and retained-file
+verification.
+
+**⏭️ NEXT:** deploy v47, then repeat Save backup → Save to Files → Verify backup
+on the phone. Everything else in the plan is specified but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
@@ -39,6 +48,7 @@ Shipped newest first:
 
 | v | What |
 |---|---|
+| v47 | **Leaked extra-photo cache repair.** Prevents `attachPhotos()`'s display-only `extraPhotos` Blob copies from being persisted by `saveWord`, and excludes already-leaked copies from backup/share/digests while retaining the canonical `photos` records referenced by `extraPhotoIds`. |
 | v46 | **Legacy spike-test repair.** Detects only the exact invalid `spike-test-word` left by the Stage 1 iPhone harness and offers a parent-confirmed removal so backup validation can pass. Future spike persistence uses non-exported test metadata rather than an invalid word row. |
 | v45 | **Verifiable, lossless private backups.** Backup and family share are separate; private backups include allowlisted metadata and an integrity manifest, while shares exclude it. Restore validates every row/reference/media item before one atomic write, protects concurrent changes with revision tokens, and a retained file can be re-selected to prove it matches the phone. Fresh-install restore safely replaces only the exact untouched starter set. |
 | v44 | **Four live data-safety fixes**, found by Codex while planning other work. (1) **Restore lost data silently** — malformed photos/people/recordings were dropped and only categories+words were even counted, so a damaged recording vanished from an apparently successful restore. `importPayload` is split into `analyzeImportPayload` (pure, write-free) + `applyImportPayload`; the restore screen itemises every problem by name and asks first; declining writes nothing; `importPayload` refuses by default, covering the Gist path. Also: duplicate ids in a file no longer silently overwrite each other, damaged media inside a valid row is reported rather than blanked away, and a repaired row never overwrites a record that appeared since (re-checked *inside* the write transaction). (2) The **twin audit could put one word in two pairs** (would have made the migration abort). (3) **Unrecognised languages were silently read as Dutch** — now reported, and saving is blocked. (4) The **seed cohort never checked its seed marker**. Saved audits are `auditVersion: 2`; v1 records are set aside. Plus `openDB` gained `onblocked`/`onversionchange` handling and stopped caching a failed open forever. |

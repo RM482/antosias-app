@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=46';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=46';
-import { startSession, initSession, showStickerBook } from './session.js?v=46';
-import { startChildMode } from './child.js?v=46';
-import { el } from './dom.js?v=46';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=46';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=46';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=47';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=47';
+import { startSession, initSession, showStickerBook } from './session.js?v=47';
+import { startChildMode } from './child.js?v=47';
+import { el } from './dom.js?v=47';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=47';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=47';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -3327,7 +3327,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=46');
+    const { startRecordingPage } = await import('./record.js?v=47');
     startRecordingPage(recordGistId);
     return;
   }
