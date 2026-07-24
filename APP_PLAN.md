@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — next release `?v=47`
+## Status (as of 24 July 2026) — live app `?v=47`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -26,7 +26,7 @@ setup test” repair and moves all future spike persistence data out of the
 passes 34 assertions with zero console errors; the exact cleanup UI and a
 successful post-cleanup backup build were also driven end to end.
 
-**v47 READY TO DEPLOY (24 July):** after the old setup test was removed, the
+**v47 DEPLOYED (24 July):** after the old setup test was removed, the
 real-iPhone backup exposed a display-only `extraPhotos` Blob accidentally saved
 inside one word by an older edit flow. Its canonical picture remains safely in
 the `photos` store and is referenced by `extraPhotoIds`. v47 strips that derived
@@ -36,8 +36,9 @@ the payload. The full browser suite passes 37 assertions with zero warnings or
 errors, including the exact leaked-cache shape, restore and retained-file
 verification.
 
-**⏭️ NEXT:** deploy v47, then repeat Save backup → Save to Files → Verify backup
-on the phone. Everything else in the plan is specified but NOT signed off.
+**⏭️ NEXT:** force-quit and reopen the phone app, then repeat Save backup → Save
+to Files → Verify backup. Everything else in the plan is specified but NOT
+signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
