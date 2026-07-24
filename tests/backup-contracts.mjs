@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // makes the analyser take media.js's documented no-AudioContext fallback.
 globalThis.window = {};
 
-const { analyzeImportPayload } = await import('../js/backup.js?v=49');
+const { analyzeImportPayload } = await import('../js/backup.js?v=50');
 
 const emptySnapshot = () => ({
   categories: [],
@@ -111,11 +111,62 @@ async function validV4WithPhrase() {
   return payload;
 }
 
+async function validV4WithParameterizedPhrase() {
+  const payload = await validV4();
+  const bytes = new Uint8Array([0]);
+  const mediaSha = await textSha256(String.fromCharCode(...bytes));
+  const type = 'audio/webm; codecs=opus';
+  const tag = {
+    __antosiaBlobV1: true,
+    data: `data:${type};base64,AA==`,
+    sha256: mediaSha,
+    size: 1,
+    type,
+  };
+  payload.meta = [{ key: 'phrase-goed-zo', value: tag }];
+  payload.manifest = undefined;
+  await signV4(payload, [
+    {
+      path: 'meta[0].value',
+      sha256: mediaSha,
+      size: 1,
+      type,
+    },
+  ]);
+  return payload;
+}
+
 {
   const analysis = await analyzeImportPayload(validLegacy(), { existingSnapshot: emptySnapshot() });
   assert.equal(analysis.writes.categories.length, 1);
   assert.equal(analysis.writes.words.length, 1);
   assert.equal(analysis.restored.length, 2);
+}
+
+{
+  const payload = await validV4WithParameterizedPhrase();
+  const analysis = await analyzeImportPayload(payload, { existingSnapshot: emptySnapshot() });
+  assert.equal(analysis.writes.meta[0].value.type, 'audio/webm; codecs=opus');
+}
+
+{
+  const payload = await validV4WithParameterizedPhrase();
+  payload.meta[0].value.data = 'data:audio/webm;base64,AA==';
+  const analysis = await analyzeImportPayload(payload, { existingSnapshot: emptySnapshot() });
+  assert.equal(
+    analysis.writes.meta[0].value.type,
+    'audio/webm; codecs=opus',
+    'manifest type survives Safari normalising parameters out of the data-URL prefix'
+  );
+}
+
+{
+  const payload = await validV4WithParameterizedPhrase();
+  payload.meta[0].value.data = 'data:image/png;base64,AA==';
+  await assert.rejects(
+    analyzeImportPayload(payload, { existingSnapshot: emptySnapshot() }),
+    /does not match its image\/audio type/
+  );
 }
 
 {

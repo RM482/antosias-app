@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto, saveRecording } from './db.js?v=49';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=49';
-import { startSession, initSession, showStickerBook } from './session.js?v=49';
-import { startChildMode } from './child.js?v=49';
-import { el } from './dom.js?v=49';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=49';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse, inspectBackupHealth, repairBackupHealth } from './backup.js?v=49';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto, saveRecording } from './db.js?v=50';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=50';
+import { startSession, initSession, showStickerBook } from './session.js?v=50';
+import { startChildMode } from './child.js?v=50';
+import { el } from './dom.js?v=50';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=50';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse, inspectBackupHealth, repairBackupHealth } from './backup.js?v=50';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -3391,7 +3391,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=49');
+    const { startRecordingPage } = await import('./record.js?v=50');
     startRecordingPage(recordGistId);
     return;
   }

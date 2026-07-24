@@ -1,4 +1,4 @@
-import { assertUsableMedia } from './media.js?v=49';
+import { assertUsableMedia } from './media.js?v=50';
 
 const DB_NAME = 'antosia-app';
 const DB_VERSION = 3;

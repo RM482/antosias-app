@@ -9,15 +9,14 @@ import {
   wordLabel,
   wordRecordingId,
   carrierRecordingId,
-} from './db.js?v=49';
-import { mediaProblem } from './media.js?v=49';
+} from './db.js?v=50';
+import { mediaProblem } from './media.js?v=50';
 
 const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
 const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];
 const BLOB_TAG = '__antosiaBlobV1';
 const SHARE_SIZE_WARN_MB = 8;
-const DATA_URL_RE =
-  /^data:(image|audio|video)\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/i;
+const MEDIA_MIME_RE = /^(image|audio|video)\/[^\s;,]+/i;
 const MEDIA_FIELDS = {
   words: ['photo', 'audioWord', 'audioPhrase'],
   people: ['photo', 'introAudio'],
@@ -57,21 +56,45 @@ export function blobToDataUrl(blob) {
   });
 }
 
-function dataUrlToBlob(dataUrl) {
-  if (typeof dataUrl !== 'string' || !DATA_URL_RE.test(dataUrl)) {
+function dataUrlToBlob(dataUrl, { expectedType = null } = {}) {
+  if (typeof dataUrl !== 'string') {
     throw new Error('A media value is not a local image/audio data URL.');
   }
-  const comma = dataUrl.indexOf(',');
-  const type = dataUrl.slice(5, dataUrl.indexOf(';', 5));
+  // FileReader is allowed to preserve MIME parameters exactly as supplied by
+  // the browser. iOS recordings can therefore produce headers such as
+  // `audio/mp4; codecs=mp4a.40.2;base64,...`; the previous all-in-one regex
+  // rejected the harmless space. Parse the structural delimiters instead.
+  const match =
+    /^data:((?:image|audio|video)\/[^\s;,]+(?:;[^,]*)?);base64,([\s\S]*)$/i.exec(dataUrl);
+  if (!match) {
+    throw new Error('A media value is not a local image/audio data URL.');
+  }
+  const declaredType = match[1];
+  if (
+    expectedType != null &&
+    (typeof expectedType !== 'string' ||
+      !MEDIA_MIME_RE.test(expectedType) ||
+      declaredType.match(MEDIA_MIME_RE)?.[1].toLowerCase() !==
+        expectedType.match(MEDIA_MIME_RE)?.[1].toLowerCase())
+  ) {
+    throw new Error('A media value does not match its image/audio type.');
+  }
+  const base64 = match[2].replace(/[\t\n\f\r ]/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error('A media value has invalid base64 data.');
+  }
   let binary;
   try {
-    binary = atob(dataUrl.slice(comma + 1));
+    binary = atob(base64);
   } catch {
     throw new Error('A media value has invalid base64 data.');
   }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type });
+  // A v4 integrity tag records the original Blob.type separately. Prefer that
+  // manifest-bound value: Safari may normalise or omit codec parameters in the
+  // FileReader prefix even though the original Blob retained them.
+  return new Blob([bytes], { type: expectedType || declaredType });
 }
 
 async function sha256(value) {
@@ -1200,7 +1223,7 @@ async function decodeTagged(value, path, foundManifest) {
       ) {
         throw new Error(`${path} has a damaged media tag.`);
       }
-      const blob = dataUrlToBlob(value.data);
+      const blob = dataUrlToBlob(value.data, { expectedType: value.type });
       const hash = await sha256(blob);
       if (blob.size !== value.size || blob.type !== value.type || hash !== value.sha256) {
         throw new Error(`${path} does not match its integrity record.`);

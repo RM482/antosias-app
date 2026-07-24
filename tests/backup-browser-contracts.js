@@ -10,7 +10,7 @@ import {
   saveRecording,
   saveStandardPhrase,
   saveWord,
-} from '../js/db.js?v=49';
+} from '../js/db.js?v=50';
 import {
   analyzeRecordingResponse,
   analyzeImportPayload,
@@ -21,8 +21,8 @@ import {
   inspectBackupHealth,
   repairBackupHealth,
   verifyBackupPayload,
-} from '../js/backup.js?v=49';
-import { recordAudio } from '../js/media.js?v=49';
+} from '../js/backup.js?v=50';
+import { recordAudio } from '../js/media.js?v=50';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
@@ -395,6 +395,9 @@ async function run() {
 
   await clearDatabase();
   const audio = wavBlob();
+  const parameterizedAudio = new Blob([await audio.arrayBuffer()], {
+    type: 'audio/wav; codecs=pcm',
+  });
   const image = pngBlob();
 
   await put('categories', { id: 'cat-1', name: 'Food', language: 'nl' });
@@ -418,7 +421,10 @@ async function run() {
     name: 'Test person',
     language: 'nl',
     photo: image,
-    introAudio: audio,
+    // Safari can preserve a codec parameter (including this legal space)
+    // in FileReader's data-URL prefix. Verification must accept it and restore
+    // the manifest-bound Blob.type exactly.
+    introAudio: parameterizedAudio,
   });
   await put('recordings', {
     id: 'person-1:word:word-1',
@@ -470,6 +476,10 @@ async function run() {
   assert(decoded.writes.photos.every((photo) => photo.blob instanceof Blob), 'photos decode to Blobs');
   const phrase = decoded.writes.meta.find((row) => row.key === 'phrase-goed-zo');
   assert(phrase.value instanceof Blob && phrase.value.size > 0, 'phrase media round-trips');
+  assert(
+    decoded.writes.people[0].introAudio.type === parameterizedAudio.type,
+    'parameterized iPhone audio MIME type round-trips exactly'
+  );
   const intake = decoded.writes.meta.find((row) => row.key === 'photoIntake:item:item-1');
   assert(intake.value.draft.audio.nl instanceof Blob, 'nested intake media round-trips');
 

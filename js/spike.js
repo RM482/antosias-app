@@ -1,5 +1,5 @@
-import { requestPersistentStorage, get, put, remove } from './db.js?v=49';
-import { downscaleImage, recordAudio, playBlob, unlockAudio } from './media.js?v=49';
+import { requestPersistentStorage, get, put, remove } from './db.js?v=50';
+import { downscaleImage, recordAudio, playBlob, unlockAudio } from './media.js?v=50';
 
 const logEl = document.getElementById('log');
 function logLine(msg) {
