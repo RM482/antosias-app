@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — next release `?v=48`
+## Status (as of 24 July 2026) — live app `?v=48`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -36,7 +36,7 @@ the payload. The full browser suite passes 37 assertions with zero warnings or
 errors, including the exact leaked-cache shape, restore and retained-file
 verification.
 
-**v48 READY TO DEPLOY (24 July):** the next real-iPhone backup attempt exposed
+**v48 DEPLOYED (24 July):** the next real-iPhone backup attempt exposed
 a zero-byte optional `people[].introAudio` clip. v48 names the affected person
 and offers a confirmed repair that clears only that unusable intro field; their
 profile, photo and all word recordings remain. `recordAudio()` now refuses a
@@ -45,9 +45,9 @@ end to end and a backup built successfully afterward; the full browser suite
 passes 41 assertions with zero warnings or errors, including direct refusal of
 a simulated zero-byte microphone result.
 
-**⏭️ NEXT:** deploy v48, force-quit and reopen the phone app, remove the named
-empty intro clip, then repeat Save backup → Save to Files → Verify backup.
-Everything else in the plan is specified but NOT signed off.
+**⏭️ NEXT:** force-quit and reopen the phone app, remove the named empty intro
+clip, then repeat Save backup → Save to Files → Verify backup. Everything else
+in the plan is specified but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
