@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — live app `?v=49`, v50 release candidate
+## Status (as of 24 July 2026) — live app `?v=50`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -61,7 +61,7 @@ recording imports reject unusable new media at ingress. The browser suite passes
 legacy problems repaired in one pass, strict post-repair backup, transaction
 rollback, nested Photo Inbox media, and every normal future save path.
 
-**v50 RELEASE CANDIDATE (24 July):** the first repaired backup saved correctly,
+**v50 DEPLOYED (24 July):** the first repaired backup saved correctly,
 but verification rejected a valid iPhone media data URL whose MIME header carried
 a codec parameter with legal spacing. The old parser's single strict regex was
 narrower than the exporter and browser. v50 parses the data-URL structure, keeps
@@ -71,9 +71,9 @@ Both parameter-preserving and Safari-normalised headers pass full
 save → decode → restore → verify coverage; a mismatched image/audio family is
 still refused. The browser suite passes 64 assertions with zero console errors.
 
-**⏭️ NEXT:** deploy v50, then force-quit and reopen the phone app and use
-**Verify backup** to select the same backup file already saved after the v49
-repair. Everything else in the plan is specified but NOT signed off.
+**⏭️ NEXT:** force-quit and reopen the phone app and use **Verify backup** to
+select the same backup file already saved after the v49 repair. Everything else
+in the plan is specified but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
