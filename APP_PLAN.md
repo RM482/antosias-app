@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — release candidate `?v=49`
+## Status (as of 24 July 2026) — live app `?v=49`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -45,7 +45,7 @@ end to end and a backup built successfully afterward; the full browser suite
 passes 41 assertions with zero warnings or errors, including direct refusal of
 a simulated zero-byte microphone result.
 
-**v49 RELEASE CANDIDATE (24 July):** the next phone attempt showed that solving
+**v49 DEPLOYED (24 July):** the next phone attempt showed that solving
 old records one at a time was the wrong abstraction: after the empty intro came
 an undecodable profile photo, and further damaged media could still be hidden
 behind it. v49 replaces the individual cleanup cards with one complete Backup
@@ -61,10 +61,10 @@ recording imports reject unusable new media at ingress. The browser suite passes
 legacy problems repaired in one pass, strict post-repair backup, transaction
 rollback, nested Photo Inbox media, and every normal future save path.
 
-**⏭️ NEXT:** deploy v49, then on the phone force-quit and reopen, tap Save backup,
-review the complete Backup Health Check, tap Repair all once, and repeat Save
-backup → Save to Files → Verify backup. Everything else in the plan is specified
-but NOT signed off.
+**⏭️ NEXT:** on the phone force-quit and reopen, tap Save backup, review the
+complete Backup Health Check, tap Repair all once, and repeat Save backup → Save
+to Files → Verify backup. Everything else in the plan is specified but NOT
+signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
