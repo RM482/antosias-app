@@ -1,4 +1,4 @@
-import { ensureSeeded, get, getAll, put, remove } from '../js/db.js?v=45';
+import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove } from '../js/db.js?v=46';
 import {
   analyzeImportPayload,
   applyImportPayload,
@@ -6,7 +6,7 @@ import {
   buildSharePayload,
   getBackupVerificationStatus,
   verifyBackupPayload,
-} from '../js/backup.js?v=45';
+} from '../js/backup.js?v=46';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
@@ -65,6 +65,23 @@ function emptySnapshot() {
 
 async function run() {
   await clearDatabase();
+  await put('words', {
+    id: 'spike-test-word',
+    categoryId: null,
+    language: 'nl',
+    article: '',
+    word: 'spike-test',
+  });
+  let spikeRefused = false;
+  try {
+    await buildBackupPayload();
+  } catch (error) {
+    spikeRefused = /missing an id, text, or category/.test(error.message);
+  }
+  assert(spikeRefused, 'legacy spike test blocks an incomplete backup');
+  await deleteWordAndCleanup('spike-test-word');
+  assert(!(await get('words', 'spike-test-word')), 'legacy spike test cleanup is exact');
+
   const audio = wavBlob();
   const image = pngBlob();
 

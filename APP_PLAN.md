@@ -1,17 +1,15 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — live app `?v=44`
+## Status (as of 24 July 2026) — live app `?v=45`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
 
-**LOCAL WORKTREE (24 July) — candidate `?v=45`, NOT DEPLOYED:** step 1 is
-implemented across `js/backup.js`, `js/db.js` and `js/admin.js`. Node contract
+**v45 DEPLOYED (24 July):** backup/restore hardening is live. Node contract
 coverage plus the real browser suite pass; the latter runs 32 assertions over
 image/audio round-trips, private/share separation, retained-file verification,
 healthy restore, tamper refusal, reference refusal, revision races and atomic
-fresh-install recovery, with zero console errors. Manual UI passes covered the
-restore review, re-selection and Settings verification state.
+fresh-install recovery, with zero console errors.
 
 Browser testing found and fixed one gap missed by the plan reviews: a fresh
 install seeds 13 random-id example words before Restore is reachable, so a merge
@@ -20,10 +18,17 @@ Restore now replaces them only when they are the exact untouched starter set,
 names that action in the review, and rechecks every seed revision inside the
 same write transaction (C-P16 in `VARIETY_AND_INTAKE_PLAN.md`).
 
-**⏭️ NEXT — finish step 1 on the real iPhone:** do the memory/share-sheet
-retention check required by C-P9 and re-select the saved file without restoring
-it. Only after that passes should v45 be committed and deployed. Everything else
-in the plan is specified but NOT signed off.
+**LOCAL WORKTREE — candidate `?v=46`, NOT DEPLOYED:** the first real-iPhone
+backup attempt found one old Stage 1 harness record (`spike-test-word`) with no
+category. v45 correctly refused to omit it. v46 shows a narrowly matched,
+parent-confirmed “Remove old setup test” repair and moves all future spike
+persistence data out of the `words` store. No real word is inferred or touched.
+The full browser suite passes 34 assertions with zero console errors; the exact
+cleanup UI and a successful post-cleanup backup build were also driven end to end.
+
+**⏭️ NEXT:** verify and deploy v46; on the phone remove the named setup test,
+then repeat Save backup → Save to Files → Verify backup. Everything else in the
+plan is specified but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
@@ -34,6 +39,7 @@ Shipped newest first:
 
 | v | What |
 |---|---|
+| v45 | **Verifiable, lossless private backups.** Backup and family share are separate; private backups include allowlisted metadata and an integrity manifest, while shares exclude it. Restore validates every row/reference/media item before one atomic write, protects concurrent changes with revision tokens, and a retained file can be re-selected to prove it matches the phone. Fresh-install restore safely replaces only the exact untouched starter set. |
 | v44 | **Four live data-safety fixes**, found by Codex while planning other work. (1) **Restore lost data silently** — malformed photos/people/recordings were dropped and only categories+words were even counted, so a damaged recording vanished from an apparently successful restore. `importPayload` is split into `analyzeImportPayload` (pure, write-free) + `applyImportPayload`; the restore screen itemises every problem by name and asks first; declining writes nothing; `importPayload` refuses by default, covering the Gist path. Also: duplicate ids in a file no longer silently overwrite each other, damaged media inside a valid row is reported rather than blanked away, and a repaired row never overwrites a record that appeared since (re-checked *inside* the write transaction). (2) The **twin audit could put one word in two pairs** (would have made the migration abort). (3) **Unrecognised languages were silently read as Dutch** — now reported, and saving is blocked. (4) The **seed cohort never checked its seed marker**. Saved audits are `auditVersion: 2`; v1 records are set aside. Plus `openDB` gained `onblocked`/`onversionchange` handling and stopped caching a failed open forever. |
 | v43 | **Child-mode flow reorder** (19 July, parent request): flag → collage of ALL that language's speakers + language intro → category tiles → (conditional) face pick → session. The collage moved from the end to the beginning; tiles now come before the voice pick, so voices are filtered to people who recorded *that category*. Default voice goes straight to the session; a family voice still gets its own intro. |
 | v42 | **Translation linking, Release 1 (non-destructive).** New `js/concepts.js`: the twin-pairing rules, deliberately PURE + SYNCHRONOUS so Release 2 can run them inside a `versionchange` transaction. `SEED_DATA` gains a shared `key` per concept (banaan/banan = 'banana'). New Settings → "🔗 Translation linking". Decisions stored under `meta` key `twinAudit`. Writes NO word records. |
@@ -49,18 +55,11 @@ Shipped newest first:
 
 ### The one thing to understand before touching backups
 
-**The `meta` store has never been included in a backup.** `buildExportPayload`
-exports five stores (`js/backup.js`); `meta` is not one of them. That store holds
-her **recorded game phrases** ("Klik op de…", "Goed zo!"), **Antosia's stickers**,
-settings, and the twin audit. A merge-restore onto a working phone doesn't delete
-them, but a wipe, reinstall or lost phone loses them permanently — and "take a
-fresh backup first" is the safety ritual the whole translation migration rests on.
-Fixing this is step 1.
-
-**Also**: "💾 Save backup" and "📤 Share with family" currently build the *same
-payload* (`js/admin.js:376`), and the share file goes to a public-if-you-have-the-
-link Gist. So anything added to the export before step 1 splits them would be
-published. This nearly happened — it was caught in review, not in testing.
+Before v45, the `meta` store was not backed up and Backup/Share used the same
+payload. v45 fixed both problems: a **private backup** carries only the allowlisted
+phrases, stickers, settings, audit and intake state, while a **family share**
+contains no `meta` at all. Never recombine those paths—the share file can be
+published to a public-if-you-have-the-link Gist.
 
 Notes for the next session:
 - ✅ Confirmed on the phone previously: **Polish audio works** (record + play) and

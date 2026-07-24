@@ -1,4 +1,4 @@
-import { ensureSeeded, getAll, remove } from '../js/db.js?v=45';
+import { ensureSeeded, getAll, put, remove } from '../js/db.js?v=46';
 
 const result = document.getElementById('result');
 const stores = ['categories', 'words', 'photos', 'people', 'recordings', 'meta'];
@@ -8,9 +8,24 @@ try {
     for (const row of await getAll(store)) await remove(store, store === 'meta' ? row.key : row.id);
   }
   await ensureSeeded('nl');
+  const withSpike = new URLSearchParams(location.search).has('spike');
+  if (withSpike) {
+    await put('words', {
+      id: 'spike-test-word',
+      categoryId: null,
+      language: 'nl',
+      article: '',
+      word: 'spike-test',
+      photo: null,
+      audioWord: null,
+    });
+  }
   const words = await getAll('words');
-  if (words.length !== 13) throw new Error(`Expected 13 starter words, found ${words.length}`);
-  result.textContent = 'PASS — untouched starter data prepared';
+  const expected = withSpike ? 14 : 13;
+  if (words.length !== expected) throw new Error(`Expected ${expected} words, found ${words.length}`);
+  result.textContent = withSpike
+    ? 'PASS — untouched starter data plus legacy spike prepared'
+    : 'PASS — untouched starter data prepared';
   document.documentElement.dataset.status = 'pass';
 } catch (error) {
   console.error(error);

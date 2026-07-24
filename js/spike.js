@@ -1,5 +1,5 @@
-import { ensureSeeded, requestPersistentStorage, get, put, remove } from './db.js';
-import { downscaleImage, recordAudio, playBlob, unlockAudio } from './media.js';
+import { requestPersistentStorage, get, put, remove } from './db.js?v=46';
+import { downscaleImage, recordAudio, playBlob, unlockAudio } from './media.js?v=46';
 
 const logEl = document.getElementById('log');
 function logLine(msg) {
@@ -118,7 +118,7 @@ playBtn.addEventListener('click', () => {
 
 // --- 5. IndexedDB persistence test -----------------------------------
 
-const TEST_WORD_ID = 'spike-test-word';
+const TEST_DATA_KEY = 'spike-test-data';
 const saveBtn = document.getElementById('save-test-word-btn');
 const clearBtn = document.getElementById('clear-test-word-btn');
 const dbStatus = document.getElementById('db-status');
@@ -129,25 +129,13 @@ function updateSaveButtonState() {
 
 saveBtn.addEventListener('click', async () => {
   try {
-    await put('words', {
-      id: TEST_WORD_ID,
-      categoryId: null,
-      language: 'nl',
-      article: '',
-      word: 'spike-test',
-      photo: lastPhotoBlob,
-      placeholderEmoji: '🧪',
-      audioWord: lastAudioBlob,
-      audioPhrase: null,
-      phraseText: '',
-      realWorldPrompt: '',
-      understandingStatus: 'not_introduced',
-      speechStatus: 'none',
-      dateIntroduced: null,
-      lastPracticed: null,
-      timesPracticed: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+    await put('meta', {
+      key: TEST_DATA_KEY,
+      value: {
+        photo: lastPhotoBlob,
+        audioWord: lastAudioBlob,
+        savedAt: Date.now(),
+      },
     });
     dbStatus.textContent =
       '✅ Saved to IndexedDB. Force-quit the app and reopen this page to confirm it survives.';
@@ -161,22 +149,22 @@ saveBtn.addEventListener('click', async () => {
 });
 
 clearBtn.addEventListener('click', async () => {
-  await remove('words', TEST_WORD_ID);
-  dbStatus.textContent = 'Test word cleared.';
-  logLine('IndexedDB: cleared test word');
+  await remove('meta', TEST_DATA_KEY);
+  dbStatus.textContent = 'Test data cleared.';
+  logLine('IndexedDB: cleared test data');
 });
 
 async function checkExistingTestWord() {
-  const existing = await get('words', TEST_WORD_ID);
+  const existing = await get('meta', TEST_DATA_KEY);
   if (existing) {
-    const photoKB = existing.photo ? (existing.photo.size / 1024).toFixed(0) : null;
-    const audioKB = existing.audioWord ? (existing.audioWord.size / 1024).toFixed(0) : null;
-    dbStatus.textContent = `✅ Found a previously saved test word (photo: ${
+    const photoKB = existing.value.photo ? (existing.value.photo.size / 1024).toFixed(0) : null;
+    const audioKB = existing.value.audioWord ? (existing.value.audioWord.size / 1024).toFixed(0) : null;
+    dbStatus.textContent = `✅ Found previously saved test data (photo: ${
       photoKB ? photoKB + 'KB' : 'none'
     }, audio: ${audioKB ? audioKB + 'KB' : 'none'}) — persistence confirmed across reload.`;
-    logLine('IndexedDB: found existing test word on load — persistence confirmed');
+    logLine('IndexedDB: found existing test data on load — persistence confirmed');
   } else {
-    dbStatus.textContent = 'No saved test word found yet. Capture a photo/audio above, then tap "Save".';
+    dbStatus.textContent = 'No saved test data found yet. Capture a photo/audio above, then tap "Save".';
   }
 }
 
@@ -184,11 +172,5 @@ async function checkExistingTestWord() {
 
 (async () => {
   logLine('Spike test harness loaded.');
-  try {
-    const inserted = await ensureSeeded();
-    logLine(inserted ? 'DB: seed data inserted.' : 'DB: already seeded.');
-  } catch (err) {
-    logLine(`DB seed error: ${err.message}`);
-  }
   await checkExistingTestWord();
 })();

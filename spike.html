@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="theme-color" content="#f6efe3" />
-  <link rel="stylesheet" href="./css/app.css" />
+  <link rel="stylesheet" href="./css/app.css?v=46" />
 </head>
 <body>
   <main class="spike">
@@ -66,13 +66,13 @@
       <h2>5. IndexedDB persistence</h2>
       <div class="btn-row">
         <button id="save-test-word-btn" disabled>Save photo + audio to IndexedDB</button>
-        <button id="clear-test-word-btn">Clear saved test word</button>
+        <button id="clear-test-word-btn">Clear saved test data</button>
       </div>
-      <p id="db-status">Checking for a previously saved test word…</p>
+      <p id="db-status">Checking for previously saved test data…</p>
       <p class="hint">
         Tap Save, then fully force-quit the app (swipe it away in the App
         Switcher) and reopen from the Home Screen — this section should still
-        report the saved word.
+        report the saved test data.
       </p>
     </section>
 
@@ -82,6 +82,6 @@
     </section>
   </main>
 
-  <script type="module" src="./js/spike.js"></script>
+  <script type="module" src="./js/spike.js?v=46"></script>
 </body>
 </html>

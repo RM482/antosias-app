@@ -9,8 +9,8 @@ import {
   wordLabel,
   wordRecordingId,
   carrierRecordingId,
-} from './db.js?v=45';
-import { canDecodeAudio } from './media.js?v=45';
+} from './db.js?v=46';
+import { canDecodeAudio } from './media.js?v=46';
 
 const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
 const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];
@@ -732,6 +732,7 @@ function pristineStarterReplacement(snapshot) {
     return !(
       row.key === 'settings' ||
       row.key === 'backupVerification' ||
+      row.key === 'spike-test-data' ||
       row.key === 'seeded' ||
       row.key.startsWith('seed:') ||
       row.key.startsWith('migrate:')

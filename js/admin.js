@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=45';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=45';
-import { startSession, initSession, showStickerBook } from './session.js?v=45';
-import { startChildMode } from './child.js?v=45';
-import { el } from './dom.js?v=45';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=45';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=45';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=46';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=46';
+import { startSession, initSession, showStickerBook } from './session.js?v=46';
+import { startChildMode } from './child.js?v=46';
+import { el } from './dom.js?v=46';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=46';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=46';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -369,6 +369,58 @@ async function renderCategories() {
         onclick: () =>
           push({ screen: 'addTranslations', wordIds: untranslated.map((w) => w.id), index: 0 }),
       })
+    );
+  }
+
+  // Stage 1's kept-on-purpose iPhone spike harness used to save its camera /
+  // microphone sample as a word with no category. That exact legacy test row
+  // is invisible in the normal editor and v45 correctly refuses to omit it
+  // from a backup. Offer a narrowly matched, parent-confirmed cleanup; never
+  // guess about any other malformed row.
+  const staleSpikeTest = allWords.find(
+    (word) =>
+      word.id === 'spike-test-word' &&
+      word.word === 'spike-test' &&
+      !allCategories.some((category) => category.id === word.categoryId)
+  );
+  if (staleSpikeTest) {
+    const media = [
+      staleSpikeTest.photo || staleSpikeTest.photoId ? 'test photo' : null,
+      staleSpikeTest.audioWord || staleSpikeTest.audioPhrase ? 'test recording' : null,
+    ].filter(Boolean);
+    screen.appendChild(
+      card('🧹 Old setup test found', [
+        el('p', {
+          class: 'settings-note settings-note-warn',
+          text: `An early camera/microphone test called “spike-test” is blocking backups. It is not one of Antosia’s words${
+            media.length ? ` and contains a ${media.join(' and a ')}` : ''
+          }.`,
+        }),
+        el('button', {
+          class: 'btn-secondary',
+          text: 'Remove old setup test',
+          style: 'width:100%;',
+          onclick: async () => {
+            const details = media.length
+              ? ` Its ${media.join(' and ')} will also be removed.`
+              : '';
+            if (
+              !confirm(
+                `Remove the old “spike-test” setup record so backups can work?${details} This will not remove any of Antosia’s real words.`
+              )
+            ) {
+              return;
+            }
+            try {
+              await deleteWordAndCleanup(staleSpikeTest.id);
+              alert('Old setup test removed. You can save and verify a backup now.');
+              render();
+            } catch (error) {
+              alert(`Could not remove the old setup test: ${errText(error)}`);
+            }
+          },
+        }),
+      ])
     );
   }
 
@@ -3275,7 +3327,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=45');
+    const { startRecordingPage } = await import('./record.js?v=46');
     startRecordingPage(recordGistId);
     return;
   }

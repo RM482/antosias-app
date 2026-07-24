@@ -1,4 +1,4 @@
-import { buildBackupPayload } from '../js/backup.js?v=45';
+import { buildBackupPayload } from '../js/backup.js?v=46';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
