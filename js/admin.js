@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=47';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=47';
-import { startSession, initSession, showStickerBook } from './session.js?v=47';
-import { startChildMode } from './child.js?v=47';
-import { el } from './dom.js?v=47';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=47';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=47';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=48';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=48';
+import { startSession, initSession, showStickerBook } from './session.js?v=48';
+import { startChildMode } from './child.js?v=48';
+import { el } from './dom.js?v=48';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=48';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=48';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -205,9 +205,10 @@ async function switchLanguage(lang) {
 }
 
 async function renderCategories() {
-  const [allCategories, allWords, settings, stickersRec] = await Promise.all([
+  const [allCategories, allWords, allPeople, settings, stickersRec] = await Promise.all([
     getAll('categories'),
     getAll('words'),
+    getAll('people'),
     getSettings(),
     get('meta', 'stickers').catch(() => null),
   ]);
@@ -417,6 +418,46 @@ async function renderCategories() {
               render();
             } catch (error) {
               alert(`Could not remove the old setup test: ${errText(error)}`);
+            }
+          },
+        }),
+      ])
+    );
+  }
+
+  // A very early iOS recording could stop without producing any bytes. The
+  // person's introduction is optional, but a zero-byte Blob cannot be backed
+  // up as valid media. Name the affected person and let the parent remove only
+  // that unusable field; their profile, photo and recordings stay untouched.
+  const peopleWithEmptyIntro = allPeople.filter(
+    (person) => person.introAudio instanceof Blob && person.introAudio.size === 0
+  );
+  for (const person of peopleWithEmptyIntro) {
+    const personName = (person.name || 'this person').trim() || 'this person';
+    screen.appendChild(
+      card('🧹 Empty intro recording found', [
+        el('p', {
+          class: 'settings-note settings-note-warn',
+          text: `${personName} has an old empty language-introduction clip that is blocking backups. Their profile, photo and word recordings are not affected.`,
+        }),
+        el('button', {
+          class: 'btn-secondary',
+          text: `Remove empty intro clip for ${personName}`,
+          style: 'width:100%;',
+          onclick: async () => {
+            if (
+              !confirm(
+                `Remove only ${personName}’s unusable empty introduction clip? Their profile, photo and word recordings will stay.`
+              )
+            ) {
+              return;
+            }
+            try {
+              await put('people', { ...person, introAudio: null, updatedAt: Date.now() });
+              alert(`The empty intro clip for ${personName} was removed. You can try saving the backup again.`);
+              render();
+            } catch (error) {
+              alert(`Could not remove the empty intro clip: ${errText(error)}`);
             }
           },
         }),
@@ -3327,7 +3368,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=47');
+    const { startRecordingPage } = await import('./record.js?v=48');
     startRecordingPage(recordGistId);
     return;
   }

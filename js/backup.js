@@ -9,8 +9,8 @@ import {
   wordLabel,
   wordRecordingId,
   carrierRecordingId,
-} from './db.js?v=47';
-import { canDecodeAudio } from './media.js?v=47';
+} from './db.js?v=48';
+import { canDecodeAudio } from './media.js?v=48';
 
 const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
 const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];

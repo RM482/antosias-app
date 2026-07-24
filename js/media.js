@@ -111,9 +111,13 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
     if (e.data && e.data.size > 0) chunks.push(e.data);
   });
 
-  const result = new Promise((resolve) => {
+  const result = new Promise((resolve, reject) => {
     recorder.addEventListener('stop', () => {
       const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+      if (blob.size === 0) {
+        reject(new Error('No audio was captured. Please try recording again.'));
+        return;
+      }
       resolve({ blob, mimeType: blob.type, durationMs: Date.now() - startedAt });
     });
   });

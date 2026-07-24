@@ -1,4 +1,4 @@
-import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove, saveWord } from '../js/db.js?v=47';
+import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove, saveWord } from '../js/db.js?v=48';
 import {
   analyzeImportPayload,
   applyImportPayload,
@@ -6,7 +6,8 @@ import {
   buildSharePayload,
   getBackupVerificationStatus,
   verifyBackupPayload,
-} from '../js/backup.js?v=47';
+} from '../js/backup.js?v=48';
+import { recordAudio } from '../js/media.js?v=48';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
@@ -64,6 +65,52 @@ function emptySnapshot() {
 }
 
 async function run() {
+  const originalMediaRecorder = window.MediaRecorder;
+  const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
+  class EmptyMediaRecorder {
+    static isTypeSupported() {
+      return true;
+    }
+
+    constructor(_stream, { mimeType = 'audio/mp4' } = {}) {
+      this.mimeType = mimeType;
+      this.state = 'inactive';
+      this.listeners = {};
+    }
+
+    addEventListener(type, listener) {
+      (this.listeners[type] ||= []).push(listener);
+    }
+
+    start() {
+      this.state = 'recording';
+    }
+
+    stop() {
+      this.state = 'inactive';
+      for (const listener of this.listeners.stop || []) listener();
+    }
+  }
+  window.MediaRecorder = EmptyMediaRecorder;
+  navigator.mediaDevices.getUserMedia = async () => ({
+    active: true,
+    getAudioTracks: () => [{ readyState: 'live', muted: false }],
+    getTracks: () => [{ stop() {} }],
+  });
+  const emptyController = await recordAudio({ maxMs: 1000 });
+  const emptyResult = emptyController.result.then(
+    () => null,
+    (error) => error
+  );
+  emptyController.stop();
+  const emptyRecordingError = await emptyResult;
+  window.MediaRecorder = originalMediaRecorder;
+  navigator.mediaDevices.getUserMedia = originalGetUserMedia;
+  assert(
+    /No audio was captured/.test(emptyRecordingError?.message || ''),
+    'zero-byte microphone result is refused before save'
+  );
+
   await clearDatabase();
   await put('words', {
     id: 'spike-test-word',
@@ -81,6 +128,26 @@ async function run() {
   assert(spikeRefused, 'legacy spike test blocks an incomplete backup');
   await deleteWordAndCleanup('spike-test-word');
   assert(!(await get('words', 'spike-test-word')), 'legacy spike test cleanup is exact');
+
+  await put('people', {
+    id: 'person-empty-intro',
+    name: 'Oma Test',
+    language: 'nl',
+    introAudio: new Blob([], { type: 'audio/mp4' }),
+  });
+  let emptyIntroRefused = false;
+  try {
+    await buildBackupPayload();
+  } catch (error) {
+    emptyIntroRefused = /introAudio is empty or is not stored as media/.test(error.message);
+  }
+  assert(emptyIntroRefused, 'zero-byte person intro blocks an incomplete backup');
+  const emptyIntroPerson = await get('people', 'person-empty-intro');
+  await put('people', { ...emptyIntroPerson, introAudio: null });
+  const repairedIntroPerson = await get('people', 'person-empty-intro');
+  assert(repairedIntroPerson.name === 'Oma Test', 'empty-intro repair keeps the person');
+  assert(repairedIntroPerson.introAudio === null, 'empty-intro repair clears only the unusable clip');
+  await remove('people', 'person-empty-intro');
 
   const audio = wavBlob();
   const image = pngBlob();

@@ -1,4 +1,4 @@
-import { ensureSeeded, getAll, put, remove } from '../js/db.js?v=47';
+import { ensureSeeded, getAll, put, remove } from '../js/db.js?v=48';
 
 const result = document.getElementById('result');
 const stores = ['categories', 'words', 'photos', 'people', 'recordings', 'meta'];
@@ -20,12 +20,25 @@ try {
       audioWord: null,
     });
   }
+  const withEmptyIntro = new URLSearchParams(location.search).has('emptyIntro');
+  if (withEmptyIntro) {
+    await put('people', {
+      id: 'person-empty-intro',
+      name: 'Oma Test',
+      language: 'nl',
+      introAudio: new Blob([], { type: 'audio/mp4' }),
+      inCollage: true,
+      isDefaultVoice: false,
+    });
+  }
   const words = await getAll('words');
   const expected = withSpike ? 14 : 13;
   if (words.length !== expected) throw new Error(`Expected ${expected} words, found ${words.length}`);
   result.textContent = withSpike
     ? 'PASS — untouched starter data plus legacy spike prepared'
-    : 'PASS — untouched starter data prepared';
+    : withEmptyIntro
+      ? 'PASS — untouched starter data plus empty intro prepared'
+      : 'PASS — untouched starter data prepared';
   document.documentElement.dataset.status = 'pass';
 } catch (error) {
   console.error(error);
