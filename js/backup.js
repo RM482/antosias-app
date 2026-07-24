@@ -1,18 +1,52 @@
-import { getAll, putAllTransactional, newId, wordLabel, wordRecordingId, carrierRecordingId } from './db.js?v=44';
-import { canDecodeAudio } from './media.js?v=44';
+import {
+  get,
+  getAll,
+  put,
+  putAllTransactional,
+  readSnapshot,
+  newId,
+  SEED_DATA,
+  wordLabel,
+  wordRecordingId,
+  carrierRecordingId,
+} from './db.js?v=45';
+import { canDecodeAudio } from './media.js?v=45';
 
-// Import order is strict: (1) validate the whole file, (2) decode every
-// photo/audio back into Blobs, (3) only then write — in a single
-// all-or-nothing transaction. Nothing touches the database until steps
-// 1 and 2 have fully succeeded, so a bad or oversized file can never
-// leave it half-imported. (Step order also matters technically: an
-// IndexedDB transaction auto-commits the moment you await anything
-// non-IndexedDB, so all decoding must finish before the write begins.)
-// v1: photos inline on each word. v2 adds the shared photos store (words may
-// carry a photoId instead of an inline photo). v3 adds `people` and
-// `recordings` (Stage 6 family voices). Older files still import fine — the
-// missing sections just default to empty.
-const SUPPORTED_FORMAT_VERSIONS = [1, 2, 3];
+const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
+const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];
+const BLOB_TAG = '__antosiaBlobV1';
+const SHARE_SIZE_WARN_MB = 8;
+const DATA_URL_RE =
+  /^data:(image|audio|video)\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/i;
+const MEDIA_FIELDS = {
+  words: ['photo', 'audioWord', 'audioPhrase'],
+  people: ['photo', 'introAudio'],
+  recordings: ['audioWord', 'audioPhrase', 'blob'],
+  photos: ['blob'],
+  categories: [],
+};
+const SETTINGS_BACKUP_FIELDS = ['language', 'testOptionCount'];
+const INTAKE_META_RE = /^(photoIntake|photoIntake:|intake:)/;
+const LEGACY_PHRASE_SLOTS = {
+  'phrase-clickon-de': 'clickOnDe',
+  'phrase-clickon-het': 'clickOnHet',
+  'phrase-correction-een': 'correctionEen',
+  'phrase-correction': 'correction',
+  'phrase-goed-zo': 'goed',
+  'phrase-pl-prompt': 'prompt',
+  'phrase-pl-correction': 'correction',
+  'phrase-pl-goed': 'goed',
+};
+
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const keyFor = (store, row) => (store === 'meta' ? row.key : row.id);
+const lexicalCompare = (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+const withoutRev = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  const copy = { ...row };
+  delete copy.rev;
+  return copy;
+};
 
 export function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -23,70 +57,264 @@ export function blobToDataUrl(blob) {
   });
 }
 
-async function dataUrlToBlob(dataUrl) {
-  const res = await fetch(dataUrl);
-  return res.blob();
+function dataUrlToBlob(dataUrl) {
+  if (typeof dataUrl !== 'string' || !DATA_URL_RE.test(dataUrl)) {
+    throw new Error('A media value is not a local image/audio data URL.');
+  }
+  const comma = dataUrl.indexOf(',');
+  const type = dataUrl.slice(5, dataUrl.indexOf(';', 5));
+  let binary;
+  try {
+    binary = atob(dataUrl.slice(comma + 1));
+  } catch {
+    throw new Error('A media value has invalid base64 data.');
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
 }
 
-export async function buildExportPayload() {
-  const [categories, words, photos, people, recordings] = await Promise.all([
-    getAll('categories'),
-    getAll('words'),
-    getAll('photos'),
-    getAll('people'),
-    getAll('recordings'),
-  ]);
-  const exportedWords = await Promise.all(
-    words.map(async (w) => ({
-      ...w,
-      photo: w.photo ? await blobToDataUrl(w.photo) : null,
-      audioWord: w.audioWord ? await blobToDataUrl(w.audioWord) : null,
-      audioPhrase: w.audioPhrase ? await blobToDataUrl(w.audioPhrase) : null,
-    }))
-  );
-  // The shared photos store: exported once per photo, even when several words
-  // (Dutch + Polish) reference the same picture via photoId.
-  const exportedPhotos = await Promise.all(
-    photos.map(async (p) => ({ id: p.id, blob: p.blob ? await blobToDataUrl(p.blob) : null }))
-  );
-  const exportedPeople = await Promise.all(
-    people.map(async (p) => ({
-      ...p,
-      photo: p.photo ? await blobToDataUrl(p.photo) : null,
-      introAudio: p.introAudio ? await blobToDataUrl(p.introAudio) : null,
-    }))
-  );
-  const exportedRecordings = await Promise.all(
-    recordings.map(async (r) => ({
-      ...r,
-      audioWord: r.audioWord ? await blobToDataUrl(r.audioWord) : null,
-      audioPhrase: r.audioPhrase ? await blobToDataUrl(r.audioPhrase) : null,
-      blob: r.blob ? await blobToDataUrl(r.blob) : null,
-    }))
-  );
-  return {
-    formatVersion: 3,
+async function sha256(value) {
+  const bytes =
+    value instanceof Blob
+      ? new Uint8Array(await value.arrayBuffer())
+      : new TextEncoder().encode(String(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function assertDecodableBlob(blob, path) {
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new Error(`${path} is empty or is not stored as media.`);
+  }
+  if (!/^(image|audio|video)\//.test(blob.type || '')) {
+    throw new Error(`${path} has no recognised image/audio type.`);
+  }
+  const imageField =
+    path.startsWith('photos[') ||
+    /\.photo(?:$|\.)/.test(path) ||
+    /\.personPhoto(?:$|\.)/.test(path);
+  if (imageField && !blob.type.startsWith('image/')) {
+    throw new Error(`${path} is not stored as an image.`);
+  }
+  if (!imageField && blob.type.startsWith('image/')) {
+    throw new Error(`${path} is not stored as audio.`);
+  }
+  if (blob.type.startsWith('image/')) {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      if (!bitmap.width || !bitmap.height) throw new Error('empty image');
+      if (bitmap.close) bitmap.close();
+    } catch {
+      throw new Error(`${path} is not a decodable image.`);
+    }
+  } else if (!(await canDecodeAudio(blob))) {
+    throw new Error(`${path} is not playable audio.`);
+  }
+}
+
+function filteredMeta(rows) {
+  return rows
+    .filter((row) => {
+      const key = row && row.key;
+      return (
+        typeof key === 'string' &&
+        (key.startsWith('phrase-') ||
+          key === 'stickers' ||
+          key === 'settings' ||
+          key === 'twinAudit' ||
+          INTAKE_META_RE.test(key))
+      );
+    })
+    .map((row) => {
+      const clean = withoutRev(row);
+      if (clean.key !== 'settings') return clean;
+      const value = {};
+      for (const field of SETTINGS_BACKUP_FIELDS) {
+        if (clean.value && own(clean.value, field)) value[field] = clean.value[field];
+      }
+      return { key: 'settings', value };
+    });
+}
+
+function sortedRows(store, rows) {
+  return [...rows].map(withoutRev).sort((a, b) => lexicalCompare(keyFor(store, a), keyFor(store, b)));
+}
+
+async function encodeRecursive(value, path, manifest) {
+  if (value instanceof Blob) {
+    await assertDecodableBlob(value, path);
+    const hash = await sha256(value);
+    const tagged = {
+      [BLOB_TAG]: true,
+      data: await blobToDataUrl(value),
+      sha256: hash,
+      size: value.size,
+      type: value.type,
+    };
+    manifest.push({ path, sha256: hash, size: value.size, type: value.type });
+    return tagged;
+  }
+  if (Array.isArray(value)) {
+    const out = [];
+    for (let i = 0; i < value.length; i += 1) {
+      out.push(await encodeRecursive(value[i], `${path}[${i}]`, manifest));
+    }
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) {
+      if (key === 'rev' || value[key] == null) continue;
+      out[key] = await encodeRecursive(value[key], `${path}.${key}`, manifest);
+    }
+    return out;
+  }
+  return value;
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value && typeof value === 'object') {
+    if (value[BLOB_TAG] === true) {
+      return {
+        [BLOB_TAG]: true,
+        sha256: value.sha256,
+        size: value.size,
+        type: value.type,
+      };
+    }
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (key === 'rev' || value[key] == null) continue;
+      out[key] = canonicalValue(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function datasetFrom(payload) {
+  // Array-of-tuples preserves the contract's fixed store order; record arrays
+  // are already sorted by each store's own key path before encoding.
+  return SNAPSHOT_STORES.map((store) => [store, payload[store] || []]);
+}
+
+async function datasetDigest(payload) {
+  return sha256(JSON.stringify(canonicalValue(datasetFrom(payload))));
+}
+
+async function encodeBackupSnapshot(snapshot) {
+  const manifest = [];
+  const logical = {};
+  for (const store of CONTENT_STORES) logical[store] = sortedRows(store, snapshot[store] || []);
+  logical.meta = sortedRows('meta', filteredMeta(snapshot.meta || []));
+  assertLogicalDataset(logical);
+  const payload = {
+    formatVersion: 4,
+    payloadKind: 'backup',
     exportedAt: Date.now(),
-    categories,
-    words: exportedWords,
-    photos: exportedPhotos,
-    people: exportedPeople,
-    recordings: exportedRecordings,
   };
+  for (const store of CONTENT_STORES) {
+    payload[store] = await encodeRecursive(logical[store], store, manifest);
+  }
+  payload.meta = await encodeRecursive(logical.meta, 'meta', manifest);
+  const digest = await datasetDigest(payload);
+  payload.manifest = {
+    algorithm: 'SHA-256',
+    digest,
+    blobs: manifest.sort((a, b) => lexicalCompare(a.path, b.path)),
+  };
+  return payload;
 }
 
-// Above this size, the Gist-based sharing flow becomes unreliable (GitHub
-// stops serving big gist files the simple way well before 10 MB, and
-// base64 already inflated the media by ~a third). Backups are never
-// blocked by size — this only gates the sharing path.
-const SHARE_SIZE_WARN_MB = 8;
+async function digestRecursive(value) {
+  if (value instanceof Blob) {
+    return {
+      [BLOB_TAG]: true,
+      sha256: await sha256(value),
+      size: value.size,
+      type: value.type,
+    };
+  }
+  if (Array.isArray(value)) {
+    const out = [];
+    for (const item of value) out.push(await digestRecursive(item));
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) {
+      if (key === 'rev' || value[key] == null) continue;
+      out[key] = await digestRecursive(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function currentDatasetDigest() {
+  const snapshot = await readSnapshot(SNAPSHOT_STORES);
+  const payload = {};
+  for (const store of CONTENT_STORES) {
+    payload[store] = await digestRecursive(sortedRows(store, snapshot[store] || []));
+  }
+  payload.meta = await digestRecursive(sortedRows('meta', filteredMeta(snapshot.meta || [])));
+  return datasetDigest(payload);
+}
+
+export async function buildBackupPayload() {
+  return encodeBackupSnapshot(await readSnapshot(SNAPSHOT_STORES));
+}
+
+async function encodeLegacyRecord(store, row, index) {
+  const out = withoutRev(row);
+  for (const field of MEDIA_FIELDS[store] || []) {
+    if (out[field] == null) continue;
+    await assertDecodableBlob(out[field], `${store}[${index}].${field}`);
+    out[field] = await blobToDataUrl(out[field]);
+  }
+  return out;
+}
+
+export async function buildSharePayload() {
+  const snapshot = await readSnapshot(CONTENT_STORES);
+  const words = sortedRows('words', snapshot.words || []);
+  const referencedPhotos = new Set(
+    words.flatMap((word) => [word.photoId, ...(word.extraPhotoIds || [])]).filter(Boolean)
+  );
+  const source = {
+    categories: sortedRows('categories', snapshot.categories || []),
+    words,
+    photos: sortedRows('photos', snapshot.photos || []).filter((photo) => referencedPhotos.has(photo.id)),
+    people: sortedRows('people', snapshot.people || []),
+    recordings: sortedRows('recordings', snapshot.recordings || []),
+    meta: [],
+  };
+  assertLogicalDataset(source);
+  const payload = { formatVersion: 3, payloadKind: 'share', exportedAt: Date.now() };
+  for (const store of CONTENT_STORES) {
+    payload[store] = [];
+    for (let i = 0; i < source[store].length; i += 1) {
+      payload[store].push(await encodeLegacyRecord(store, source[store][i], i));
+    }
+  }
+  return payload;
+}
+
+// Kept as the private-backup default for older module callers. New UI code
+// passes an explicit kind, so a share can never accidentally inherit meta.
+export async function buildExportPayload() {
+  return buildBackupPayload();
+}
 
 // Tries the native share sheet first (lets you AirDrop/Message/email the
 // file directly on iOS); falls back to a plain download if unsupported.
 // Pass { warnLargeShare: true } when the file is destined for the shared
 //-link flow, so oversized exports get flagged before leaving the phone.
-export async function exportAndShare({ warnLargeShare = false } = {}) {
-  const payload = await buildExportPayload();
+export async function exportAndShare({ kind = 'backup', warnLargeShare = false } = {}) {
+  if (!['backup', 'share'].includes(kind)) throw new Error(`Unknown export kind: ${kind}`);
+  const payload = kind === 'share' ? await buildSharePayload() : await buildBackupPayload();
   const json = JSON.stringify(payload);
   const sizeMB = (json.length / 1024 / 1024).toFixed(1);
 
@@ -96,7 +324,9 @@ export async function exportAndShare({ warnLargeShare = false } = {}) {
     );
     if (!proceed) return { method: 'cancelled', sizeMB };
   }
-  return shareJsonFile({ json, filename: 'antosias-app-export.json', title: "Antosia's app export", sizeMB });
+  const filename = kind === 'share' ? 'antosias-app-share.json' : 'antosias-app-backup.json';
+  const title = kind === 'share' ? "Antosia's app family share" : "Antosia's app private backup";
+  return shareJsonFile({ json, filename, title, sizeMB });
 }
 
 // Offers a JSON file through the native share sheet (AirDrop/WhatsApp/etc. on
@@ -127,17 +357,22 @@ export async function shareJsonFile({ json, filename, title, sizeMB = null }) {
   return { method: 'download', sizeMB };
 }
 
-// Whole-file integrity: if these fail the file isn't a usable export at all,
-// so we refuse rather than guess. (Individual malformed records are handled
-// separately below — one stray record must never sink an entire restore.)
 function assertStructurallyValid(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('This file does not look like an export from this app.');
   }
-  if (!SUPPORTED_FORMAT_VERSIONS.includes(payload.formatVersion)) {
+  const pair = `${payload.formatVersion}:${payload.payloadKind || 'legacy'}`;
+  const allowed = new Set(['1:legacy', '2:legacy', '3:legacy', '3:share', '4:backup']);
+  if (!allowed.has(pair)) {
     throw new Error(
       'This backup was made by a newer version of the app than the one running now. Update the app first, then import again.'
     );
+  }
+  if (payload.payloadKind === 'share' && own(payload, 'meta')) {
+    throw new Error('This share file contains private backup data and has been refused.');
+  }
+  if (payload.formatVersion === 4 && !Array.isArray(payload.meta)) {
+    throw new Error('This private backup is incomplete or damaged (missing private app data).');
   }
   if (!Array.isArray(payload.categories) || !Array.isArray(payload.words)) {
     throw new Error('This export file is incomplete or damaged (missing categories or words).');
@@ -145,15 +380,9 @@ function assertStructurallyValid(payload) {
 }
 
 const isUsableCategory = (c) => c && typeof c.id === 'string' && typeof c.name === 'string';
-// A word needs an id, a word text, and a real category to belong to. Records
-// with a null/empty categoryId (e.g. leftover test entries) can never be
-// shown in the app, so they're dropped rather than carried forward.
 const isUsableWord = (w) =>
   w && typeof w.id === 'string' && typeof w.word === 'string' && typeof w.categoryId === 'string' && w.categoryId !== '';
 
-// How a record identifies itself in the omission report. Falls back to the
-// store + position so a row with no id and no name is still nameable — "we
-// dropped something, somewhere" is exactly the report this fix exists to stop.
 function rowIdentity(store, row, index) {
   const id = row && typeof row.id === 'string' && row.id ? row.id : null;
   const label =
@@ -166,261 +395,602 @@ function rowIdentity(store, row, index) {
   return id || label || `${store}[${index}]`;
 }
 
-// Splits "what would this file do" from "do it", so the parent can be shown
-// exactly what is unusable BEFORE anything is written.
-//
-// Previously these rows were filtered away and only categories and words were
-// even counted, so a damaged photo, person or recording vanished from an
-// apparently successful restore without ever being mentioned. Silent loss in
-// the one mechanism that exists to recover from loss.
-//
-// Pure and synchronous: no decoding, no database access. Returns the usable
-// rows plus an itemised list of everything omitted and why.
-// Media travels as a base64 `data:` URL with a real media type and a payload.
-// Anything else — an empty string, `data:,`, a stray "null", an http URL — is
-// damaged, and must never reach `fetch()`.
-// Structural check only. Deliberately no minimum length: a 1×1 PNG is a valid
-// ~70-character data URL, and rejecting media merely for being small would
-// discard data we cannot show is bad. Proving the bytes actually DECODE is
-// C-P6's job in the backup-hardening step — until then a correctly-labelled but
-// corrupt clip still passes here.
-// The type is restricted to image/audio because that is all these fields ever
-// hold; `data:text/html;base64,…` is not media and must not be written over
-// one. The payload length must be a valid base64 multiple of 4.
-const DATA_URL_RE = /^data:(image|audio|video)\/[a-z0-9.+-]+(;[a-z0-9-]+=[^;,]*)*;base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/i;
-const isUsableMedia = (v) => {
-  if (typeof v !== 'string' || !DATA_URL_RE.test(v)) return false;
-  const payload = v.slice(v.indexOf(',') + 1);
-  return payload.length > 0 && payload.length % 4 === 0;
-};
-
-const MEDIA_FIELDS = {
-  words: ['photo', 'audioWord', 'audioPhrase'],
-  people: ['photo', 'introAudio'],
-  recordings: ['audioWord', 'audioPhrase', 'blob'],
-  photos: ['blob'],
-  categories: [],
-};
-
-const damagedFields = (store, row) =>
-  (MEDIA_FIELDS[store] || []).filter((f) => row[f] != null && !isUsableMedia(row[f]));
-
-// `existingIds` is `{ store: Set<id> }` for what the database already holds —
-// read by the caller and passed in so this stays pure and write-free. It is
-// what lets a damaged row be handled correctly: see the media rules below.
-export function analyzeImportPayload(payload, { existingIds = {} } = {}) {
-  assertStructurallyValid(payload);
-  const omitted = [];
-  const guardedIds = {};
-  const has = (store, id) => !!(existingIds[store] && existingIds[store].has(id));
-
-  const collect = (store, rows, isUsable, reason) => {
-    const valid = [];
-    (rows || []).forEach((row, index) => {
-      if (!isUsable(row)) {
-        omitted.push({ store, index, identity: rowIdentity(store, row, index), reason });
-        return;
-      }
-      valid.push({ row, index });
-    });
-
-    // Two rows with one id: the transaction would put() both and the second
-    // would silently replace the first, while the summary counted two. Pick the
-    // copy that PRESERVES THE MOST MEDIA, not merely the first, and not the one
-    // with the fewest damaged fields — by that measure a copy carrying no media
-    // at all beats a copy with a good photo and one broken clip, and her only
-    // photo would be thrown away. Ties keep the earlier copy.
-    const usableCount = (row) => (MEDIA_FIELDS[store] || []).filter((f) => isUsableMedia(row[f])).length;
-    const byId = new Map();
-    for (const entry of valid) {
-      const prev = byId.get(entry.row.id);
-      if (!prev) { byId.set(entry.row.id, entry); continue; }
-      const a = usableCount(entry.row);
-      const b = usableCount(prev.row);
-      const better =
-        a > b || (a === b && damagedFields(store, entry.row).length < damagedFields(store, prev.row).length)
-          ? entry
-          : prev;
-      const worse = better === entry ? prev : entry;
-      byId.set(entry.row.id, better);
-      omitted.push({
-        store,
-        index: worse.index,
-        kind: 'duplicate',
-        identity: rowIdentity(store, worse.row, worse.index),
-        reason:
-          usableCount(better.row) > usableCount(worse.row)
-            ? 'a second copy of this same entry in the file; the copy with more of its media was used'
-            : damagedFields(store, better.row).length < damagedFields(store, worse.row).length
-              ? 'a second copy of this same entry in the file; the less damaged copy was used'
-              : 'a second copy of this same entry in the file; the first one was used',
-      });
+function assertUniqueRows(store, rows) {
+  const seen = new Set();
+  let previous = null;
+  for (let i = 0; i < rows.length; i += 1) {
+    const key = keyFor(store, rows[i] || {});
+    if (typeof key !== 'string' || !key) {
+      throw new Error(`${rowIdentity(store, rows[i], i)} is missing its ${store === 'meta' ? 'key' : 'id'}.`);
     }
+    if (seen.has(key)) throw new Error(`${store} contains the same id/key twice (${key}).`);
+    if (previous != null && lexicalCompare(previous, key) > 0) {
+      throw new Error(`${store} records are not in canonical key order.`);
+    }
+    seen.add(key);
+    previous = key;
+  }
+}
 
-    // Rows whose media is damaged. Which way this goes depends on whether the
-    // record already exists here, because `put()` REPLACES the whole record:
-    //   • already on the phone → skip the row entirely. Writing it would blank
-    //     a recording that is currently fine. The live copy is left untouched.
-    //   • not on the phone (a wipe/reinstall restore) → keep it with the broken
-    //     field emptied. The word's text is worth having; there is nothing live
-    //     to protect.
-    // Either way it is reported by name.
+function assertLogicalDataset(decoded, { references = true } = {}) {
+  for (const store of SNAPSHOT_STORES) assertUniqueRows(store, decoded[store] || []);
+  for (let i = 0; i < decoded.categories.length; i += 1) {
+    if (!isUsableCategory(decoded.categories[i])) {
+      throw new Error(`${rowIdentity('categories', decoded.categories[i], i)} is missing an id or name.`);
+    }
+  }
+  for (let i = 0; i < decoded.words.length; i += 1) {
+    if (!isUsableWord(decoded.words[i])) {
+      throw new Error(`${rowIdentity('words', decoded.words[i], i)} is missing an id, text, or category.`);
+    }
+  }
+  for (const store of CONTENT_STORES) {
+    for (let i = 0; i < decoded[store].length; i += 1) {
+      for (const field of MEDIA_FIELDS[store] || []) {
+        const value = decoded[store][i][field];
+        if (value != null && !(value instanceof Blob)) {
+          throw new Error(`${store}[${i}].${field} is not valid encoded media.`);
+        }
+      }
+    }
+  }
+  for (let i = 0; i < decoded.photos.length; i += 1) {
+    if (!(decoded.photos[i].blob instanceof Blob)) {
+      throw new Error(`${rowIdentity('photos', decoded.photos[i], i)} has no usable picture.`);
+    }
+  }
+  for (let i = 0; i < decoded.people.length; i += 1) {
+    if (typeof decoded.people[i].name !== 'string') {
+      throw new Error(`${rowIdentity('people', decoded.people[i], i)} has no name.`);
+    }
+  }
+  for (let i = 0; i < decoded.recordings.length; i += 1) {
+    if (typeof decoded.recordings[i].personId !== 'string') {
+      throw new Error(`${rowIdentity('recordings', decoded.recordings[i], i)} has no person.`);
+    }
+  }
+  for (let i = 0; i < decoded.meta.length; i += 1) {
+    const row = decoded.meta[i];
+    const key = row.key;
+    const allowed =
+      key.startsWith('phrase-') ||
+      key === 'stickers' ||
+      key === 'settings' ||
+      key === 'twinAudit' ||
+      INTAKE_META_RE.test(key);
+    if (!allowed) throw new Error(`Private backup data contains a key that is not allowed (${key}).`);
+    if (key.startsWith('phrase-')) {
+      const bare = row.value instanceof Blob;
+      const variants =
+        Array.isArray(row.value) &&
+        row.value.every(
+          (item) => item && typeof item.id === 'string' && item.blob instanceof Blob
+        );
+      if (!bare && !variants) throw new Error(`Private game phrase ${key} is damaged.`);
+    } else if (key === 'stickers' && !Array.isArray(row.value)) {
+      throw new Error('The sticker collection in this backup is damaged.');
+    } else if (
+      (key === 'settings' || key === 'twinAudit' || INTAKE_META_RE.test(key)) &&
+      (!row.value || typeof row.value !== 'object')
+    ) {
+      throw new Error(`Private backup data ${key} is damaged.`);
+    }
+  }
+  if (references) {
+    const empty = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, []]));
+    assertReferences(empty, decoded);
+  }
+}
+
+async function decodeTagged(value, path, foundManifest) {
+  if (Array.isArray(value)) {
     const out = [];
-    const guarded = new Set();
-    for (const { row, index } of byId.values()) {
-      const broken = damagedFields(store, row);
-      if (broken.length === 0) { out.push(row); continue; }
-      const live = has(store, row.id);
-      omitted.push({
-        store,
-        index,
-        id: row.id,
-        field: broken.join(', '),
-        kind: live ? 'skipped' : 'repaired',
-        identity: rowIdentity(store, row, index),
-        reason: live
-          ? `its ${broken.join(' and ')} in this file is damaged — the copy already on the phone was left alone`
-          : `its ${broken.join(' and ')} is damaged, so it comes back without that part`,
-      });
-      if (!live) {
-        const cleaned = { ...row };
-        for (const f of broken) cleaned[f] = null;
-        out.push(cleaned);
-        // Absent when analysed, but something could be written before the
-        // restore transaction opens. Guarded rows are re-checked inside it.
-        guarded.add(row.id);
+    for (let i = 0; i < value.length; i += 1) {
+      out.push(await decodeTagged(value[i], `${path}[${i}]`, foundManifest));
+    }
+    return out;
+  }
+  if (value && typeof value === 'object') {
+    if (value[BLOB_TAG] === true) {
+      if (
+        typeof value.data !== 'string' ||
+        typeof value.sha256 !== 'string' ||
+        typeof value.size !== 'number' ||
+        typeof value.type !== 'string'
+      ) {
+        throw new Error(`${path} has a damaged media tag.`);
+      }
+      const blob = dataUrlToBlob(value.data);
+      const hash = await sha256(blob);
+      if (blob.size !== value.size || blob.type !== value.type || hash !== value.sha256) {
+        throw new Error(`${path} does not match its integrity record.`);
+      }
+      await assertDecodableBlob(blob, path);
+      foundManifest.push({ path, sha256: hash, size: blob.size, type: blob.type });
+      return blob;
+    }
+    const out = {};
+    for (const key of Object.keys(value)) {
+      if (key === 'rev') continue;
+      out[key] = await decodeTagged(value[key], `${path}.${key}`, foundManifest);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function decodeLegacyRows(store, rows) {
+  const decoded = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const out = withoutRev(rows[i]);
+    for (const field of MEDIA_FIELDS[store] || []) {
+      if (out[field] == null) continue;
+      const path = `${store}[${i}].${field}`;
+      const blob = dataUrlToBlob(out[field]);
+      await assertDecodableBlob(blob, path);
+      out[field] = blob;
+    }
+    decoded.push(out);
+  }
+  return decoded;
+}
+
+async function decodeAndValidatePayload(payload) {
+  assertStructurallyValid(payload);
+  for (const store of CONTENT_STORES) assertUniqueRows(store, payload[store] || []);
+  if (payload.formatVersion === 4) assertUniqueRows('meta', payload.meta);
+
+  const decoded = {};
+  if (payload.formatVersion === 4) {
+    if (!payload.manifest || payload.manifest.algorithm !== 'SHA-256') {
+      throw new Error('This private backup has no supported integrity manifest.');
+    }
+    const actualDigest = await datasetDigest(payload);
+    if (actualDigest !== payload.manifest.digest) {
+      throw new Error('This backup’s data does not match its integrity manifest.');
+    }
+    const found = [];
+    for (const store of SNAPSHOT_STORES) {
+      decoded[store] = await decodeTagged(payload[store] || [], store, found);
+    }
+    const expectedBlobs = JSON.stringify(
+      [...(payload.manifest.blobs || [])].sort((a, b) => lexicalCompare(a.path, b.path))
+    );
+    const actualBlobs = JSON.stringify(found.sort((a, b) => lexicalCompare(a.path, b.path)));
+    if (expectedBlobs !== actualBlobs) {
+      throw new Error('This backup’s media list does not match its integrity manifest.');
+    }
+  } else {
+    for (const store of CONTENT_STORES) {
+      decoded[store] = await decodeLegacyRows(store, payload[store] || []);
+    }
+    decoded.meta = [];
+  }
+
+  assertLogicalDataset(decoded, { references: false });
+  return decoded;
+}
+
+function mergeByKey(store, current, incoming) {
+  const merged = new Map(current.map((row) => [keyFor(store, row), row]));
+  for (const row of incoming) merged.set(keyFor(store, row), row);
+  return merged;
+}
+
+function assertReferences(current, writes) {
+  const merged = {};
+  for (const store of CONTENT_STORES) {
+    merged[store] = mergeByKey(store, current[store] || [], writes[store] || []);
+  }
+  for (const word of merged.words.values()) {
+    if (!merged.categories.has(word.categoryId)) {
+      throw new Error(`Word “${word.word || word.id}” refers to a category that is not present.`);
+    }
+    for (const photoId of [word.photoId, ...(word.extraPhotoIds || [])].filter(Boolean)) {
+      if (!merged.photos.has(photoId)) {
+        throw new Error(`Word “${word.word || word.id}” refers to a picture that is not present.`);
       }
     }
-    guardedIds[store] = guarded;
-    return out;
-  };
-
-  const categories = collect('categories', payload.categories, isUsableCategory, 'missing an id or a name');
-  const words = collect('words', payload.words, isUsableWord, 'missing an id, its text, or its category');
-  // photos is absent in v1 files. A photo IS its image, so unlike a word there
-  // is no salvageable remainder — a damaged one is rejected outright rather
-  // than kept with an empty blob.
-  const photos = collect(
-    'photos',
-    payload.photos,
-    (p) => p && typeof p.id === 'string' && isUsableMedia(p.blob),
-    'missing an id, or its picture is damaged'
-  );
-  // people/recordings are absent in v1/v2 files.
-  const people = collect(
-    'people',
-    payload.people,
-    (p) => p && typeof p.id === 'string' && typeof p.name === 'string',
-    'missing an id or a name'
-  );
-  const recordings = collect(
-    'recordings',
-    payload.recordings,
-    (r) => r && typeof r.id === 'string' && typeof r.personId === 'string',
-    'missing an id or the person it belongs to'
-  );
-
-  return { usable: { categories, words, photos, people, recordings }, omitted, guardedIds };
+  }
+  for (const recording of merged.recordings.values()) {
+    if (!merged.people.has(recording.personId)) {
+      throw new Error(`Recording ${recording.id} refers to a person that is not present.`);
+    }
+    if (recording.wordId && !merged.words.has(recording.wordId)) {
+      throw new Error(`Recording ${recording.id} refers to a word that is not present.`);
+    }
+  }
+  const mergedMeta = mergeByKey('meta', current.meta || [], writes.meta || []);
+  for (const row of mergedMeta.values()) {
+    if (row.key.startsWith('photoIntake:item:')) {
+      if (!row.value.photoId || !merged.photos.has(row.value.photoId)) {
+        throw new Error(`Photo Inbox item ${row.value.id || row.key} refers to a picture that is not present.`);
+      }
+    }
+  }
+  const header = mergedMeta.get('photoIntake');
+  if (header && Array.isArray(header.value.itemIds)) {
+    for (const itemId of header.value.itemIds) {
+      if (!mergedMeta.has(`photoIntake:item:${itemId}`)) {
+        throw new Error(`The Photo Inbox refers to an item that is not present (${itemId}).`);
+      }
+    }
+  }
 }
 
-// Decodes every photo/audio back into Blobs and writes them in ONE
-// all-or-nothing transaction. Decoding happens first and outside the
-// transaction (see the header note), so a decode failure aborts with zero
-// writes rather than leaving a half-restored database.
-export async function applyImportPayload(analysis) {
-  const {
-    categories,
-    words: usableWords,
-    photos: usablePhotos,
-    people: usablePeople,
-    recordings: usableRecordings,
-  } = analysis.usable;
-
-  const words = await Promise.all(
-    usableWords.map(async (w) => ({
-      ...w,
-      photo: w.photo ? await dataUrlToBlob(w.photo) : null,
-      audioWord: w.audioWord ? await dataUrlToBlob(w.audioWord) : null,
-      audioPhrase: w.audioPhrase ? await dataUrlToBlob(w.audioPhrase) : null,
-    }))
-  );
-  const photos = await Promise.all(
-    usablePhotos.map(async (p) => ({ id: p.id, blob: await dataUrlToBlob(p.blob) }))
-  );
-  const people = await Promise.all(
-    usablePeople.map(async (p) => ({
-      ...p,
-      photo: p.photo ? await dataUrlToBlob(p.photo) : null,
-      introAudio: p.introAudio ? await dataUrlToBlob(p.introAudio) : null,
-    }))
-  );
-  const recordings = await Promise.all(
-    usableRecordings.map(async (r) => ({
-      ...r,
-      audioWord: r.audioWord ? await dataUrlToBlob(r.audioWord) : null,
-      audioPhrase: r.audioPhrase ? await dataUrlToBlob(r.audioPhrase) : null,
-      blob: r.blob ? await dataUrlToBlob(r.blob) : null,
-    }))
-  );
-
-  const { skipped: guardedSkips = [] } = await putAllTransactional(
-    { categories, words, photos, people, recordings },
-    'restoring data',
-    { skipIfPresent: analysis.guardedIds || {} }
-  );
-  // A repaired row whose record appeared between analysis and the write was
-  // correctly left alone — so it was not repaired, it was skipped. Reporting it
-  // as "came back without its recording" would be false.
-  const lateSkips = new Set(guardedSkips.map((k) => `${k.store}:${k.id}`));
-  const lateByStore = (store) => guardedSkips.filter((k) => k.store === store).length;
-  return {
-    categories: categories.length - lateByStore('categories'),
-    words: words.length - lateByStore('words'),
-    photos: photos.length - lateByStore('photos'),
-    people: people.length - lateByStore('people'),
-    recordings: recordings.length - lateByStore('recordings'),
-    omitted: analysis.omitted,
-    // Only rows that were genuinely NOT written count as skipped. A repaired
-    // row (restored without its damaged clip) and a duplicate that lost to a
-    // more complete copy are reported, but they are not losses of an entry.
-    skipped:
-      analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length +
-      lateSkips.size,
-    repaired: analysis.omitted.filter(
-      (o) => o.kind === 'repaired' && !lateSkips.has(`${o.store}:${o.id}`)
-    ).length,
-    lateSkipped: guardedSkips,
-  };
+function hasMedia(store, row) {
+  return (MEDIA_FIELDS[store] || []).some((field) => row && row[field] instanceof Blob);
 }
 
-// Existing records with the same id are overwritten; everything else is left
-// alone (merge-by-id).
-//
-// REFUSES by default when any record would be omitted: a caller that cannot
-// show the parent what is being dropped must not drop anything. The restore
-// screen analyses first, lists the omissions, and only then calls this with
-// `allowOmissions` after an explicit confirmation.
-// Reads which ids the database already holds, so analysis can tell a
-// wipe-recovery restore (nothing to protect) from a merge into live data
-// (where writing a damaged row would destroy a good one).
-export async function readExistingIds() {
-  const stores = ['categories', 'words', 'photos', 'people', 'recordings'];
-  const sets = await Promise.all(
-    stores.map(async (s) => [s, new Set((await getAll(s)).map((r) => r.id))])
-  );
-  return Object.fromEntries(sets);
+async function mediaDifference(store, live, incoming) {
+  for (const field of MEDIA_FIELDS[store] || []) {
+    const a = live && live[field];
+    const b = incoming && incoming[field];
+    if (!!a !== !!b) return true;
+    if (a instanceof Blob && b instanceof Blob) {
+      if (a.size !== b.size || a.type !== b.type || (await sha256(a)) !== (await sha256(b))) return true;
+    }
+  }
+  return false;
 }
 
-export async function importPayload(payload, { allowOmissions = false } = {}) {
-  const analysis = analyzeImportPayload(payload, { existingIds: await readExistingIds() });
-  if (analysis.omitted.length > 0 && !allowOmissions) {
-    const names = analysis.omitted.slice(0, 5).map((o) => `${o.store}: ${o.identity}`).join(', ');
-    const more = analysis.omitted.length > 5 ? `, and ${analysis.omitted.length - 5} more` : '';
-    throw new Error(
-      `This file has ${analysis.omitted.length} unusable entr${analysis.omitted.length === 1 ? 'y' : 'ies'} (${names}${more}). Nothing was imported.`
+function mergeMetaValue(key, live, incoming) {
+  if (key.startsWith('phrase-')) {
+    if (Array.isArray(live) || Array.isArray(incoming)) {
+      const slot = LEGACY_PHRASE_SLOTS[key] || key.slice(7);
+      const current = Array.isArray(live) ? live : live ? [{ id: `pv:1:${slot}`, blob: live, label: '' }] : [];
+      const fromFile = Array.isArray(incoming)
+        ? incoming
+        : incoming
+          ? [{ id: `pv:1:${slot}`, blob: incoming, label: '' }]
+          : [];
+      const byId = new Map(fromFile.map((item) => [item.id, item]));
+      for (const item of current) byId.set(item.id, item);
+      return [...byId.values()];
+    }
+    return live ?? incoming;
+  }
+  if (key === 'stickers') {
+    const all = [...(Array.isArray(incoming) ? incoming : []), ...(Array.isArray(live) ? live : [])];
+    const seen = new Set();
+    return all.filter((item) => {
+      const identity = JSON.stringify([item && item.emoji, item && item.earnedAt]);
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
+  }
+  if (key === 'settings') {
+    const value = {};
+    for (const field of SETTINGS_BACKUP_FIELDS) {
+      if (incoming && own(incoming, field)) value[field] = incoming[field];
+      else if (live && own(live, field)) value[field] = live[field];
+    }
+    if (live && own(live, 'lastBackupAt')) value.lastBackupAt = live.lastBackupAt;
+    return value;
+  }
+  if (key === 'twinAudit') {
+    const base = live || incoming || {};
+    return { ...base, ready: false, invalidatedAt: Date.now() };
+  }
+  if (INTAKE_META_RE.test(key)) return live ?? incoming;
+  return live ?? incoming;
+}
+
+function buildMetaWrites(currentRows, incomingRows, finalWordIds) {
+  const current = new Map(currentRows.map((row) => [row.key, row]));
+  const incoming = new Map(incomingRows.map((row) => [row.key, row]));
+  const keys = new Set([...incoming.keys()]);
+  if (incoming.has('twinAudit') || current.has('twinAudit')) keys.add('twinAudit');
+  const writes = [];
+  for (const key of keys) {
+    const live = current.get(key);
+    const fromFile = incoming.get(key);
+    if (key.startsWith('photoIntake:item:') && !live && fromFile) {
+      const allocated = Object.values((fromFile.value && fromFile.value.wordIds) || {}).filter(Boolean);
+      if (allocated.some((id) => finalWordIds.has(id))) continue;
+    }
+    writes.push({ key, value: mergeMetaValue(key, live && live.value, fromFile && fromFile.value) });
+  }
+  const itemIds = new Set(
+    [
+      ...current.keys(),
+      ...writes.map((row) => row.key),
+    ]
+      .filter((key) => key.startsWith('photoIntake:item:'))
+      .map((key) => key.slice('photoIntake:item:'.length))
+  );
+  const headerIndex = writes.findIndex((row) => row.key === 'photoIntake');
+  if (headerIndex >= 0) {
+    writes[headerIndex] = {
+      ...writes[headerIndex],
+      value: { ...writes[headerIndex].value, itemIds: [...itemIds].sort() },
+    };
+  }
+  return writes;
+}
+
+// A brand-new install creates example words before the parent can reach
+// Restore. Those examples have random word ids, so a normal merge would keep
+// them beside the backed-up copies and the restored database could never match
+// its own manifest. Treat the database as empty only when it is provably the
+// untouched starter set: exact seed rows, no media or child progress, no custom
+// content, and v45 revision tokens on every row. Anything less exact stays on
+// the ordinary non-destructive merge path.
+function pristineStarterReplacement(snapshot) {
+  if (
+    (snapshot.photos || []).length ||
+    (snapshot.people || []).length ||
+    (snapshot.recordings || []).length
+  ) {
+    return null;
+  }
+  const userMeta = (snapshot.meta || []).some((row) => {
+    if (!row || typeof row.key !== 'string') return true;
+    if (row.key.startsWith('phrase-') || row.key === 'twinAudit' || INTAKE_META_RE.test(row.key)) return true;
+    if (row.key === 'stickers') return Array.isArray(row.value) ? row.value.length > 0 : true;
+    return !(
+      row.key === 'settings' ||
+      row.key === 'backupVerification' ||
+      row.key === 'seeded' ||
+      row.key.startsWith('seed:') ||
+      row.key.startsWith('migrate:')
     );
+  });
+  if (userMeta) return null;
+
+  const categories = snapshot.categories || [];
+  const words = snapshot.words || [];
+  if (!categories.length || !words.length) return null;
+  if (![...categories, ...words].every((row) => typeof row.rev === 'string' && row.rev)) return null;
+  const starterCategoryFields = new Set(['id', 'name', 'emoji', 'order', 'language', 'createdAt', 'rev']);
+  const starterWordFields = new Set([
+    'id',
+    'categoryId',
+    'language',
+    'article',
+    'word',
+    'photo',
+    'placeholderEmoji',
+    'audioWord',
+    'audioPhrase',
+    'phraseText',
+    'realWorldPrompt',
+    'understandingStatus',
+    'speechStatus',
+    'excluded',
+    'srsLevel',
+    'nextReviewDate',
+    'dateIntroduced',
+    'lastPracticed',
+    'timesPracticed',
+    'createdAt',
+    'updatedAt',
+    'rev',
+  ]);
+  if (
+    categories.some((row) => Object.keys(row).some((key) => !starterCategoryFields.has(key))) ||
+    words.some((row) => Object.keys(row).some((key) => !starterWordFields.has(key)))
+  ) {
+    return null;
+  }
+
+  const expectedCategories = new Map();
+  const expectedWords = new Map();
+  for (const [language, data] of Object.entries(SEED_DATA)) {
+    for (const category of data.categories) {
+      expectedCategories.set(category.id, { ...category, language });
+    }
+    for (const word of data.words) {
+      expectedWords.set(
+        [language, word.categoryId, word.article, word.word, word.placeholderEmoji].join('\u0000'),
+        word
+      );
+    }
+  }
+
+  const languages = new Set();
+  for (const category of categories) {
+    const expected = expectedCategories.get(category.id);
+    const language = category.language ?? 'nl';
+    if (
+      !expected ||
+      language !== expected.language ||
+      category.name !== expected.name ||
+      category.emoji !== expected.emoji ||
+      category.order !== expected.order ||
+      category.pairedCategoryId
+    ) {
+      return null;
+    }
+    languages.add(language);
+  }
+  for (const word of words) {
+    const language = word.language ?? 'nl';
+    const key = [language, word.categoryId, word.article ?? '', word.word, word.placeholderEmoji].join('\u0000');
+    const expected = expectedWords.get(key);
+    const defaultPrompt = `Find ${[expected && expected.article, expected && expected.word].filter(Boolean).join(' ')}`;
+    if (
+      !expected ||
+      word.photo ||
+      word.photoId ||
+      (word.extraPhotoIds && word.extraPhotoIds.length) ||
+      word.audioWord ||
+      word.audioPhrase ||
+      (word.phraseText ?? '') !== '' ||
+      (word.realWorldPrompt ?? defaultPrompt) !== defaultPrompt ||
+      (word.understandingStatus ?? 'not_introduced') !== 'not_introduced' ||
+      (word.speechStatus ?? 'none') !== 'none' ||
+      (word.excluded ?? false) !== false ||
+      (word.srsLevel ?? 0) !== 0 ||
+      (word.timesPracticed ?? 0) !== 0 ||
+      word.nextReviewDate != null ||
+      word.dateIntroduced != null ||
+      word.lastPracticed != null
+    ) {
+      return null;
+    }
+    languages.add(language);
+  }
+  for (const language of languages) {
+    const data = SEED_DATA[language];
+    if (!data) return null;
+    if (
+      categories.filter((row) => (row.language ?? 'nl') === language).length !== data.categories.length ||
+      words.filter((row) => (row.language ?? 'nl') === language).length !== data.words.length
+    ) {
+      return null;
+    }
+  }
+
+  return {
+    filtered: { ...snapshot, categories: [], words: [] },
+    deleteExpectedRevs: {
+      categories: new Map(categories.map((row) => [row.id, row.rev])),
+      words: new Map(words.map((row) => [row.id, row.rev])),
+    },
+    summary: { categories: categories.length, words: words.length },
+  };
+}
+
+export async function analyzeImportPayload(
+  payload,
+  { existingSnapshot = null, replacePristineStarter = false } = {}
+) {
+  const decoded = await decodeAndValidatePayload(payload);
+  const originalCurrent = existingSnapshot || (await readSnapshot(SNAPSHOT_STORES));
+  const starterReplacement = replacePristineStarter ? pristineStarterReplacement(originalCurrent) : null;
+  const current = starterReplacement ? starterReplacement.filtered : originalCurrent;
+  const writes = Object.fromEntries(CONTENT_STORES.map((store) => [store, []]));
+  const expectedRevs = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, new Map()]));
+  const conflicts = [];
+  const protectedLegacy = [];
+  const restored = [];
+
+  for (const store of CONTENT_STORES) {
+    const liveById = new Map((current[store] || []).map((row) => [row.id, row]));
+    for (const incomingRaw of decoded[store] || []) {
+      const incoming = withoutRev(incomingRaw);
+      const live = liveById.get(incoming.id);
+      if (!live) {
+        restored.push({ store, id: incoming.id, identity: rowIdentity(store, incoming, 0) });
+        expectedRevs[store].set(incoming.id, undefined);
+        writes[store].push(incoming);
+        continue;
+      }
+      if (!own(live, 'rev') && hasMedia(store, live)) {
+        protectedLegacy.push({
+          store,
+          id: incoming.id,
+          identity: rowIdentity(store, incoming, 0),
+          reason: 'the copy already on this phone predates exact change tracking and contains media, so it was left untouched',
+        });
+        continue;
+      }
+      if (await mediaDifference(store, live, incoming)) {
+        conflicts.push({
+          store,
+          id: incoming.id,
+          identity: rowIdentity(store, incoming, 0),
+          reason: 'the backup and the phone contain different media',
+        });
+      }
+      expectedRevs[store].set(incoming.id, own(live, 'rev') ? live.rev : null);
+      writes[store].push(incoming);
+    }
+  }
+
+  const finalWordIds = new Set([
+    ...(current.words || []).map((row) => row.id),
+    ...writes.words.map((row) => row.id),
+  ]);
+  writes.meta = buildMetaWrites(current.meta || [], decoded.meta || [], finalWordIds);
+  const liveMeta = new Map((current.meta || []).map((row) => [row.key, row]));
+  for (const row of writes.meta) {
+    const live = liveMeta.get(row.key);
+    expectedRevs.meta.set(row.key, live ? (own(live, 'rev') ? live.rev : null) : undefined);
+  }
+  assertReferences(current, writes);
+  return {
+    payload,
+    writes,
+    expectedRevs,
+    conflicts,
+    protectedLegacy,
+    restored,
+    deleteExpectedRevs: starterReplacement ? starterReplacement.deleteExpectedRevs : {},
+    replacedStarter: starterReplacement ? starterReplacement.summary : null,
+    omitted: [],
+  };
+}
+
+export async function applyImportPayload(analysis) {
+  const { skipped = [] } = await putAllTransactional(
+    analysis.writes,
+    'restoring data',
+    {
+      expectedRevs: analysis.expectedRevs,
+      deleteExpectedRevs: analysis.deleteExpectedRevs || {},
+    }
+  );
+  const count = (store) =>
+    (analysis.writes[store] || []).length - skipped.filter((item) => item.store === store).length;
+  return {
+    categories: count('categories'),
+    words: count('words'),
+    photos: count('photos'),
+    people: count('people'),
+    recordings: count('recordings'),
+    meta: count('meta'),
+    skipped: skipped.length + analysis.protectedLegacy.length,
+    protectedLegacy: analysis.protectedLegacy,
+    lateSkipped: skipped,
+  };
+}
+
+export async function readExistingIds() {
+  const snapshot = await readSnapshot(CONTENT_STORES);
+  return Object.fromEntries(
+    CONTENT_STORES.map((store) => [store, new Set(snapshot[store].map((row) => row.id))])
+  );
+}
+
+export async function importPayload(payload) {
+  const analysis = await analyzeImportPayload(payload);
+  if (analysis.conflicts.length || analysis.protectedLegacy.length) {
+    throw new Error('This import needs review in the Restore screen before anything can be written.');
   }
   return applyImportPayload(analysis);
+}
+
+export async function verifyBackupPayload(payload) {
+  assertStructurallyValid(payload);
+  if (payload.formatVersion !== 4 || payload.payloadKind !== 'backup') {
+    throw new Error('Only a new private backup can be verified. Save a fresh backup first.');
+  }
+  await decodeAndValidatePayload(payload);
+  const currentDigest = await currentDatasetDigest();
+  if (payload.manifest.digest !== currentDigest) {
+    throw new Error('This backup is valid, but it no longer matches the data currently on this phone.');
+  }
+  const receipt = {
+    digest: payload.manifest.digest,
+    verifiedAt: Date.now(),
+    exportedAt: payload.exportedAt || null,
+  };
+  await put('meta', { key: 'backupVerification', value: receipt });
+  return receipt;
+}
+
+export async function getBackupVerificationStatus() {
+  const receiptRow = await get('meta', 'backupVerification');
+  const receipt = receiptRow && receiptRow.value;
+  if (!receipt || typeof receipt.digest !== 'string') return { verified: false, receipt: null };
+  try {
+    return { verified: (await currentDatasetDigest()) === receipt.digest, receipt };
+  } catch {
+    return { verified: false, receipt };
+  }
 }
 
 // Secret Gists are readable by anyone with the exact ID via GitHub's public

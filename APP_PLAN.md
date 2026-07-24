@@ -1,14 +1,29 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 21 July 2026, end of session) — live app `?v=44`
+## Status (as of 24 July 2026) — live app `?v=44`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
 
-**⏭️ NEXT SESSION — start step 1 of `VARIETY_AND_INTAKE_PLAN.md`**: the backup
-and restore hardening. It is the only step signed off to build (13 Codex review
-rounds; round 13 said "safe to start — yes" and listed what the first commit
-should contain). Everything else in that plan is specified but NOT signed off.
+**LOCAL WORKTREE (24 July) — candidate `?v=45`, NOT DEPLOYED:** step 1 is
+implemented across `js/backup.js`, `js/db.js` and `js/admin.js`. Node contract
+coverage plus the real browser suite pass; the latter runs 32 assertions over
+image/audio round-trips, private/share separation, retained-file verification,
+healthy restore, tamper refusal, reference refusal, revision races and atomic
+fresh-install recovery, with zero console errors. Manual UI passes covered the
+restore review, re-selection and Settings verification state.
+
+Browser testing found and fixed one gap missed by the plan reviews: a fresh
+install seeds 13 random-id example words before Restore is reachable, so a merge
+would have duplicated those examples and could never match the backup manifest.
+Restore now replaces them only when they are the exact untouched starter set,
+names that action in the review, and rechecks every seed revision inside the
+same write transaction (C-P16 in `VARIETY_AND_INTAKE_PLAN.md`).
+
+**⏭️ NEXT — finish step 1 on the real iPhone:** do the memory/share-sheet
+retention check required by C-P9 and re-select the saved file without restoring
+it. Only after that passes should v45 be committed and deployed. Everything else
+in the plan is specified but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which

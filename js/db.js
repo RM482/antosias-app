@@ -1,5 +1,6 @@
 const DB_NAME = 'antosia-app';
 const DB_VERSION = 3;
+const RECORD_STORES = new Set(['meta', 'categories', 'words', 'photos', 'people', 'recordings']);
 
 let dbPromise = null;
 
@@ -108,14 +109,47 @@ export async function get(storeName, id) {
   return reqToPromise(db.transaction(storeName).objectStore(storeName).get(id));
 }
 
+function recordForWrite(storeName, value) {
+  if (!RECORD_STORES.has(storeName) || !value || typeof value !== 'object') return value;
+  // `rev` is an opaque, device-local compare token. Every write gets a fresh
+  // value, including restore writes; a token arriving in a backup is never
+  // trusted as evidence about this database's history.
+  return { ...value, rev: newId() };
+}
+
 export async function put(storeName, value) {
   const db = await openDB();
   const t = db.transaction(storeName, 'readwrite');
-  t.objectStore(storeName).put(value);
+  const written = recordForWrite(storeName, value);
+  t.objectStore(storeName).put(written);
   return new Promise((resolve, reject) => {
-    t.oncomplete = () => resolve(value);
+    t.oncomplete = () => resolve(written);
     t.onerror = () => reject(storageError(t.error, 'saving data'));
     t.onabort = () => reject(storageError(t.error, 'saving data (transaction aborted, possibly out of storage space)'));
+  });
+}
+
+// Reads several stores through cursors in ONE readonly transaction. The
+// returned objects retain Blob handles, but no encoding/hashing is attempted
+// until after the transaction completes: awaiting non-IDB work while a
+// transaction is live can auto-commit it and split the logical snapshot.
+export async function readSnapshot(storeNames) {
+  const db = await openDB();
+  const t = db.transaction(storeNames, 'readonly');
+  const result = Object.fromEntries(storeNames.map((name) => [name, []]));
+  for (const storeName of storeNames) {
+    const req = t.objectStore(storeName).openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) return;
+      result[storeName].push(cursor.value);
+      cursor.continue();
+    };
+  }
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve(result);
+    t.onerror = () => reject(storageError(t.error, 'reading a backup snapshot'));
+    t.onabort = () => reject(storageError(t.error, 'reading a backup snapshot'));
   });
 }
 
@@ -141,33 +175,90 @@ export async function remove(storeName, id) {
 // file was analysed, because put() replaces the whole record and the live one
 // may hold good media. The check has to happen here rather than at analysis
 // time, or there is a window in which a write can land in between.
-export async function putAllTransactional(writes, context = 'restoring data', { skipIfPresent = {} } = {}) {
+export async function putAllTransactional(
+  writes,
+  context = 'restoring data',
+  { skipIfPresent = {}, expectedRevs = {}, deleteExpectedRevs = {} } = {}
+) {
   const db = await openDB();
-  const storeNames = Object.keys(writes);
+  const storeNames = [...new Set([...Object.keys(writes), ...Object.keys(deleteExpectedRevs)])];
   const t = db.transaction(storeNames, 'readwrite');
   // Guarded records that turned out to be present after all, so the caller can
   // report accurately instead of claiming it wrote them.
   const skipped = [];
-  for (const storeName of storeNames) {
-    const store = t.objectStore(storeName);
-    const guarded = skipIfPresent[storeName];
-    for (const record of writes[storeName]) {
-      if (guarded && guarded.has(record.id)) {
-        // Same transaction, so nothing can slip in between this read and the put.
-        const req = store.get(record.id);
-        req.onsuccess = () => {
-          if (req.result === undefined) store.put(record);
-          else skipped.push({ store: storeName, id: record.id });
-        };
-        continue;
+  let preflightError = null;
+
+  const queueWrites = () => {
+    for (const storeName of Object.keys(writes)) {
+      const store = t.objectStore(storeName);
+      const guarded = skipIfPresent[storeName];
+      const expected = expectedRevs[storeName];
+      for (const record of writes[storeName]) {
+        const key = storeName === 'meta' ? record.key : record.id;
+        const write = () => store.put(recordForWrite(storeName, record));
+        if (expected && expected.has(key)) {
+          const expectedRev = expected.get(key);
+          const req = store.get(key);
+          req.onsuccess = () => {
+            const live = req.result;
+            const liveRev = live && Object.prototype.hasOwnProperty.call(live, 'rev') ? live.rev : null;
+            const liveExists = live !== undefined;
+            const expectedExists = expectedRev !== undefined;
+            if (liveExists !== expectedExists || (expectedExists && liveRev !== expectedRev)) {
+              skipped.push({ store: storeName, id: key, reason: 'changed' });
+            } else {
+              write();
+            }
+          };
+          continue;
+        }
+        if (guarded && guarded.has(key)) {
+          // Same transaction, so nothing can slip in between this read and the put.
+          const req = store.get(key);
+          req.onsuccess = () => {
+            if (req.result === undefined) write();
+            else skipped.push({ store: storeName, id: key, reason: 'appeared' });
+          };
+          continue;
+        }
+        write();
       }
-      store.put(record);
+    }
+  };
+
+  const deletes = [];
+  for (const [storeName, expected] of Object.entries(deleteExpectedRevs)) {
+    for (const [key, rev] of expected) deletes.push({ storeName, key, rev });
+  }
+  if (deletes.length === 0) {
+    queueWrites();
+  } else {
+    let remaining = deletes.length;
+    for (const item of deletes) {
+      const req = t.objectStore(item.storeName).get(item.key);
+      req.onsuccess = () => {
+        const live = req.result;
+        const liveRev = live && Object.prototype.hasOwnProperty.call(live, 'rev') ? live.rev : null;
+        if (!live || liveRev !== item.rev) {
+          preflightError = new Error('The untouched starter data changed while the restore was being reviewed. Nothing was restored.');
+          t.abort();
+          return;
+        }
+        remaining -= 1;
+        if (remaining === 0) {
+          for (const pending of deletes) t.objectStore(pending.storeName).delete(pending.key);
+          queueWrites();
+        }
+      };
     }
   }
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve({ skipped });
-    t.onerror = () => reject(storageError(t.error, context));
-    t.onabort = () => reject(storageError(t.error, `${context} (transaction aborted, possibly out of storage space)`));
+    t.onerror = () => {
+      if (!preflightError) reject(storageError(t.error, context));
+    };
+    t.onabort = () =>
+      reject(preflightError || storageError(t.error, `${context} (transaction aborted, possibly out of storage space)`));
   });
 }
 
@@ -234,13 +325,13 @@ export async function savePerson(person) {
     allReq.onsuccess = () => {
       for (const p of allReq.result) {
         if (p.id !== person.id && p.language === person.language && p.isDefaultVoice) {
-          store.put({ ...p, isDefaultVoice: false, updatedAt: Date.now() });
+          store.put(recordForWrite('people', { ...p, isDefaultVoice: false, updatedAt: Date.now() }));
         }
       }
-      store.put(person);
+      store.put(recordForWrite('people', person));
     };
   } else {
-    store.put(person);
+    store.put(recordForWrite('people', person));
   }
   return new Promise((resolve, reject) => {
     t.oncomplete = () => resolve(person);

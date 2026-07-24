@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=44';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=44';
-import { startSession, initSession, showStickerBook } from './session.js?v=44';
-import { startChildMode } from './child.js?v=44';
-import { el } from './dom.js?v=44';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=44';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, readExistingIds, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=44';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=45';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=45';
+import { startSession, initSession, showStickerBook } from './session.js?v=45';
+import { startChildMode } from './child.js?v=45';
+import { el } from './dom.js?v=45';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=45';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=45';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -372,10 +372,9 @@ async function renderCategories() {
     );
   }
 
-  // Both buttons produce the same export file; they differ in intent and
-  // messaging. Backup = safety copy for yourself, never size-gated.
-  // Share = destined for a public-if-you-have-the-link Gist, so it gets a
-  // privacy warning and a size check first.
+  // Backup and Share are deliberately different payloads. A private backup
+  // includes allowlisted app metadata (phrases, stickers, settings); a family
+  // share never includes meta and only carries photos referenced by words.
   function exportButton({ label, busyLabel, options, beforeExport, doneMessage, onSuccess }) {
     return el('button', {
       class: 'btn-secondary',
@@ -406,10 +405,10 @@ async function renderCategories() {
     exportButton({
       label: '💾 Save backup',
       busyLabel: 'Preparing backup…',
-      options: {},
+      options: { kind: 'backup' },
       onSuccess: () => saveSettings({ lastBackupAt: Date.now() }),
       doneMessage: (sizeMB) =>
-        `Backup saved (~${sizeMB} MB) as "antosias-app-export.json". Keep it somewhere safe — Files, iCloud Drive, or AirDrop it to your computer. It contains everything: words, photos, and recordings.`,
+        `Private backup saved (~${sizeMB} MB) as "antosias-app-backup.json". Keep it somewhere safe, then use “Verify backup” below to prove the retained file matches this phone.`,
     })
   );
 
@@ -417,15 +416,41 @@ async function renderCategories() {
     exportButton({
       label: '📤 Share with family',
       busyLabel: 'Preparing export…',
-      options: { warnLargeShare: true },
+      options: { kind: 'share', warnLargeShare: true },
       beforeExport: () =>
         confirm(
           'Heads up: a shared link is unlisted but not private — anyone who has the link can see the photos and hear the recordings. Share it only with people you trust. Continue?'
         ),
       doneMessage: (sizeMB) =>
-        `Exported (~${sizeMB} MB) as "antosias-app-export.json". Check your Downloads or Files app — send that file to whoever is publishing the shared link.`,
+        `Family share exported (~${sizeMB} MB) as "antosias-app-share.json". It does not contain private app settings, stickers, or game phrases.`,
     })
   );
+
+  const verifyInput = el('input', { type: 'file', accept: 'application/json,.json', hidden: '' });
+  verifyInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      const receipt = await verifyBackupPayload(payload);
+      alert(
+        `Backup verified. The retained file is complete and matches the data on this phone (${formatBackupDate(receipt.verifiedAt)}).`
+      );
+      render();
+    } catch (err) {
+      alert(`Backup verification failed: ${errText(err)}`);
+    }
+  });
+  screen.appendChild(
+    el('button', {
+      class: 'btn-secondary',
+      text: '✅ Verify backup',
+      style: 'margin-top:8px;width:100%;',
+      onclick: () => verifyInput.click(),
+    })
+  );
+  screen.appendChild(verifyInput);
 
   // Restore from a backup file the parent saved earlier. A hidden file input
   // is triggered by the visible button; the picked file is read, parsed, and
@@ -450,40 +475,30 @@ async function renderCategories() {
       } catch {
         throw new Error('That file is not readable — make sure it is an export from this app.');
       }
-      // Analyse before writing: if anything in the file is unusable the parent
-      // is told exactly what, by name, and decides. Declining writes nothing.
-      // (Damaged photos, people and recordings used to be dropped silently —
-      // they were not even counted.)
-      const analysis = analyzeImportPayload(payload, { existingIds: await readExistingIds() });
-      if (analysis.omitted.length > 0) {
-        const lines = analysis.omitted
-          .slice(0, 12)
-          .map((o) => `• ${o.store}: ${o.identity} — ${o.reason}`)
-          .join('\n');
-        const more =
-          analysis.omitted.length > 12 ? `\n…and ${analysis.omitted.length - 12} more.` : '';
-        // Not everything listed is a loss: some entries come back without a
-        // damaged clip, and some are duplicates where a better copy won. Saying
-        // "cannot be restored" about all of them would misdescribe it.
-        const lost = analysis.omitted.filter((o) => o.kind !== 'repaired' && o.kind !== 'duplicate').length;
-        const others = analysis.omitted.length - lost;
-        const headline = !lost
-          ? `${others} thing${others === 1 ? '' : 's'} to know about this backup:`
-          : others === 0
-            ? `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored:`
-            : `${lost} entr${lost === 1 ? 'y' : 'ies'} in this backup cannot be restored, and there ${
-                others === 1 ? 'is 1 other note' : `are ${others} other notes`
-              }:`;
+      // Analysis validates and decodes every row and every media Blob before
+      // any write. One malformed row aborts the whole restore; there is no
+      // silent salvage mode.
+      const analysis = await analyzeImportPayload(payload, { replacePristineStarter: true });
+      const review = [
+        ...(analysis.replacedStarter
+          ? [
+              `• REPLACE EXAMPLES: ${analysis.replacedStarter.categories} untouched starter categories and ${analysis.replacedStarter.words} untouched starter words`,
+            ]
+          : []),
+        ...analysis.conflicts.map((item) => `• REPLACE ${item.store}: ${item.identity} — ${item.reason}`),
+        ...analysis.restored.map((item) => `• ADD BACK ${item.store}: ${item.identity}`),
+        ...analysis.protectedLegacy.map((item) => `• LEAVE ALONE ${item.store}: ${item.identity} — ${item.reason}`),
+      ];
+      if (review.length > 0) {
+        const lines = review.slice(0, 14).join('\n');
+        const more = review.length > 14 ? `\n…and ${review.length - 14} more.` : '';
         const proceed = confirm(
-          `${headline}\n\n${lines}${more}\n\nGo ahead with the restore? (Nothing has been changed yet. Keep this backup file either way — a newer version of the app may be able to read more of it.)`
+          `Review what this restore will do:\n\n${lines}${more}\n\nGo ahead? Nothing has been changed yet.`
         );
         if (!proceed) return;
       }
       const result = await applyImportPayload(analysis);
-      const notes = [];
-      if (result.skipped) notes.push(`${result.skipped} could not be restored`);
-      if (result.repaired) notes.push(`${result.repaired} came back without a damaged recording or picture`);
-      const skippedNote = notes.length ? ` (${notes.join('; ')})` : '';
+      const skippedNote = result.skipped ? ` (${result.skipped} left untouched because it changed or could not be compared safely)` : '';
       const peopleNote = result.people || result.recordings
         ? `, ${result.people} ${result.people === 1 ? 'person' : 'people'} and ${result.recordings} voice recording${result.recordings === 1 ? '' : 's'}`
         : '';
@@ -1397,7 +1412,11 @@ async function renderSettings() {
   appEl.appendChild(topbar({ title: 'Settings', onBack: () => pop() }));
   const screen = el('div', { class: 'screen' });
 
-  const [settings, storage] = await Promise.all([getSettings(), getStorageStatus()]);
+  const [settings, storage, backupVerification] = await Promise.all([
+    getSettings(),
+    getStorageStatus(),
+    getBackupVerificationStatus(),
+  ]);
   const lang = settings.language || 'nl';
   const langLabel = (LANGUAGES.find((l) => l.code === lang) || {}).label || '';
   const phrases = await getStandardPhrases(lang);
@@ -1575,6 +1594,14 @@ async function renderSettings() {
   const overdue = last == null || daysSince >= 30;
   const backupChildren = [
     el('p', { class: 'settings-line', text: `Last backup: ${formatBackupDate(last)}` }),
+    el('p', {
+      class: backupVerification.verified ? 'settings-line' : 'settings-note settings-note-warn',
+      text: backupVerification.verified
+        ? `✅ Verified backup matches this phone (${formatBackupDate(backupVerification.receipt.verifiedAt)}).`
+        : backupVerification.receipt
+          ? 'The last verified backup no longer matches the current data. Save and verify a new one.'
+          : 'No retained backup has been verified yet. After saving, re-select the file with “Verify backup”.',
+    }),
   ];
   if (overdue) {
     backupChildren.push(
@@ -2303,12 +2330,13 @@ async function renderQuickRecord(view) {
 // decision on anything that isn't backed by evidence, and stores those decisions
 // (by word id, with a dataset signature) for the migration to revalidate later.
 async function renderTwinAudit(view) {
-  const [allWords, settings, allCategories, seedNl, seedPl] = await Promise.all([
+  const [allWords, settings, allCategories, seedNl, seedPl, backupVerification] = await Promise.all([
     getAll('words'),
     getSettings(),
     getAll('categories'),
     get('meta', 'seed:nl:v1').catch(() => null),
     get('meta', 'seed:pl:v1').catch(() => null),
+    getBackupVerificationStatus(),
   ]);
   await attachPhotos(allWords);
   // The seed markers and categories are read HERE and passed in, so the planner
@@ -2325,9 +2353,10 @@ async function renderTwinAudit(view) {
   }
   const decisions = view.decisions;
 
-  // The backup must be taken FROM THIS FLOW: a backup from last week doesn't
-  // protect the data as it stands right now.
-  const backupFresh = (settings.lastBackupAt ?? 0) >= view.openedAt;
+  // A timestamp only proves that the share/download handoff returned. The
+  // destructive migration is gated by a retained file whose manifest was
+  // re-selected and compared with a fresh digest of this exact database.
+  const backupFresh = backupVerification.verified;
 
   appEl.appendChild(topbar({ title: '🔗 Translation linking', onBack: () => pop() }));
   const screen = el('div', { class: 'screen' });
@@ -2342,12 +2371,12 @@ async function renderTwinAudit(view) {
   // --- Step 1: fresh backup -------------------------------------------------
   const backupChildren = [];
   if (backupFresh) {
-    backupChildren.push(el('p', { class: 'settings-line', text: '✅ Fresh backup saved.' }));
+    backupChildren.push(el('p', { class: 'settings-line', text: '✅ Retained backup verified against this phone.' }));
   } else {
     backupChildren.push(
       el('p', {
         class: 'settings-note',
-        text: 'Save a backup now, before anything else. Your recordings and photos exist only on this phone.',
+        text: 'Save a private backup, keep the file, then re-select it to verify it. A download timestamp alone is not enough.',
       })
     );
     backupChildren.push(
@@ -2360,7 +2389,7 @@ async function renderTwinAudit(view) {
           btn.disabled = true;
           btn.textContent = 'Preparing backup…';
           try {
-            const { method, sizeMB } = await exportAndShare({});
+            const { method, sizeMB } = await exportAndShare({ kind: 'backup' });
             if (method === 'cancelled') return; // nothing left the phone
             await saveSettings({ lastBackupAt: Date.now() });
             if (method === 'download') {
@@ -2377,6 +2406,28 @@ async function renderTwinAudit(view) {
           }
         },
       })
+    );
+    const verifyInput = el('input', { type: 'file', accept: 'application/json,.json', hidden: '' });
+    verifyInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        await verifyBackupPayload(JSON.parse(await file.text()));
+        alert('Backup verified. It matches the data currently on this phone.');
+        render();
+      } catch (err) {
+        alert(`Backup verification failed: ${errText(err)}`);
+      }
+    });
+    backupChildren.push(
+      el('button', {
+        class: 'btn-secondary',
+        text: '✅ Verify saved backup',
+        style: 'width:100%;margin-top:8px;',
+        onclick: () => verifyInput.click(),
+      }),
+      verifyInput
     );
   }
   screen.appendChild(card('1. Backup first', backupChildren));
@@ -3224,7 +3275,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=44');
+    const { startRecordingPage } = await import('./record.js?v=45');
     startRecordingPage(recordGistId);
     return;
   }

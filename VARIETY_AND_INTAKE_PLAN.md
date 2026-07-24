@@ -379,6 +379,19 @@ destructive migration. Validate that every word's category exists; every
 existing word and person; every ledger item references an existing photo; and,
 once on DB v5, that concept constraints hold.
 
+**C-P16 — a fresh-install restore replaces only the provably untouched starter
+set.** Browser verification on 24 July found a recovery gap that the review rounds
+had missed: the app seeds 13 example words before the Restore button is reachable,
+and those words have new random ids on every install. A normal merge would retain
+the new examples beside the backed-up copies, so the restored database could not
+match its own manifest. Restore may treat the current content as empty only when
+it is an exact, complete seed cohort with no photos, recordings, people, progress,
+stickers, phrases, audit or intake data, and every seed row has a v45 `rev`.
+The review screen names the replacement. Deleting those example rows and writing
+the backup happen in the same transaction; every seed `rev` is rechecked inside
+that transaction, and any late change aborts the whole restore with zero writes.
+All other databases keep the ordinary non-destructive merge behaviour.
+
 ### 1.5 The verified-backup mechanism (replaces the timestamp gate)
 
 Today "fresh backup" means `lastBackupAt >= screen-open time`
