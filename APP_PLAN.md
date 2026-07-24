@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — live app `?v=45`
+## Status (as of 24 July 2026) — live app `?v=46`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -18,17 +18,17 @@ Restore now replaces them only when they are the exact untouched starter set,
 names that action in the review, and rechecks every seed revision inside the
 same write transaction (C-P16 in `VARIETY_AND_INTAKE_PLAN.md`).
 
-**LOCAL WORKTREE — candidate `?v=46`, NOT DEPLOYED:** the first real-iPhone
-backup attempt found one old Stage 1 harness record (`spike-test-word`) with no
-category. v45 correctly refused to omit it. v46 shows a narrowly matched,
-parent-confirmed “Remove old setup test” repair and moves all future spike
-persistence data out of the `words` store. No real word is inferred or touched.
-The full browser suite passes 34 assertions with zero console errors; the exact
-cleanup UI and a successful post-cleanup backup build were also driven end to end.
+**v46 DEPLOYED (24 July):** the first real-iPhone backup attempt found one old
+Stage 1 harness record (`spike-test-word`) with no category. v45 correctly
+refused to omit it. v46 shows a narrowly matched, parent-confirmed “Remove old
+setup test” repair and moves all future spike persistence data out of the
+`words` store. No real word is inferred or touched. The full browser suite
+passes 34 assertions with zero console errors; the exact cleanup UI and a
+successful post-cleanup backup build were also driven end to end.
 
-**⏭️ NEXT:** verify and deploy v46; on the phone remove the named setup test,
-then repeat Save backup → Save to Files → Verify backup. Everything else in the
-plan is specified but NOT signed off.
+**⏭️ NEXT:** on the phone remove the named setup test, then repeat Save backup →
+Save to Files → Verify backup. Everything else in the plan is specified but NOT
+signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
@@ -39,6 +39,7 @@ Shipped newest first:
 
 | v | What |
 |---|---|
+| v46 | **Legacy spike-test repair.** Detects only the exact invalid `spike-test-word` left by the Stage 1 iPhone harness and offers a parent-confirmed removal so backup validation can pass. Future spike persistence uses non-exported test metadata rather than an invalid word row. |
 | v45 | **Verifiable, lossless private backups.** Backup and family share are separate; private backups include allowlisted metadata and an integrity manifest, while shares exclude it. Restore validates every row/reference/media item before one atomic write, protects concurrent changes with revision tokens, and a retained file can be re-selected to prove it matches the phone. Fresh-install restore safely replaces only the exact untouched starter set. |
 | v44 | **Four live data-safety fixes**, found by Codex while planning other work. (1) **Restore lost data silently** — malformed photos/people/recordings were dropped and only categories+words were even counted, so a damaged recording vanished from an apparently successful restore. `importPayload` is split into `analyzeImportPayload` (pure, write-free) + `applyImportPayload`; the restore screen itemises every problem by name and asks first; declining writes nothing; `importPayload` refuses by default, covering the Gist path. Also: duplicate ids in a file no longer silently overwrite each other, damaged media inside a valid row is reported rather than blanked away, and a repaired row never overwrites a record that appeared since (re-checked *inside* the write transaction). (2) The **twin audit could put one word in two pairs** (would have made the migration abort). (3) **Unrecognised languages were silently read as Dutch** — now reported, and saving is blocked. (4) The **seed cohort never checked its seed marker**. Saved audits are `auditVersion: 2`; v1 records are set aside. Plus `openDB` gained `onblocked`/`onversionchange` handling and stopped caching a failed open forever. |
 | v43 | **Child-mode flow reorder** (19 July, parent request): flag → collage of ALL that language's speakers + language intro → category tiles → (conditional) face pick → session. The collage moved from the end to the beginning; tiles now come before the voice pick, so voices are filtered to people who recorded *that category*. Default voice goes straight to the session; a family voice still gets its own intro. |
