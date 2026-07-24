@@ -1,10 +1,10 @@
-import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto } from './db.js?v=48';
-import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=48';
-import { startSession, initSession, showStickerBook } from './session.js?v=48';
-import { startChildMode } from './child.js?v=48';
-import { el } from './dom.js?v=48';
-import { buildAuditPlan, validateManualPair } from './concepts.js?v=48';
-import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse } from './backup.js?v=48';
+import { ensureSeeded, migrateDutchCategoryNames, requestPersistentStorage, getStorageStatus, getSettings, saveSettings, getStandardPhrases, saveStandardPhrase, guessUsesEen, usesEen, LANGUAGES, getAll, get, put, remove, newId, wordLabel, isSessionEligible, saveWord, attachPhotos, deleteWordAndCleanup, savePerson, deletePersonAndCleanup, wordRecordingId, carrierRecordingId, savePhoto, saveRecording } from './db.js?v=49';
+import { downscaleImage, recordAudio, unlockAudio, playBlob } from './media.js?v=49';
+import { startSession, initSession, showStickerBook } from './session.js?v=49';
+import { startChildMode } from './child.js?v=49';
+import { el } from './dom.js?v=49';
+import { buildAuditPlan, validateManualPair } from './concepts.js?v=49';
+import { exportAndShare, importFromGist, analyzeImportPayload, applyImportPayload, verifyBackupPayload, getBackupVerificationStatus, shareJsonFile, blobToDataUrl, analyzeRecordingResponse, applyRecordingResponse, inspectBackupHealth, repairBackupHealth } from './backup.js?v=49';
 
 const appEl = document.getElementById('app');
 const stack = [{ screen: 'categories' }];
@@ -205,10 +205,9 @@ async function switchLanguage(lang) {
 }
 
 async function renderCategories() {
-  const [allCategories, allWords, allPeople, settings, stickersRec] = await Promise.all([
+  const [allCategories, allWords, settings, stickersRec] = await Promise.all([
     getAll('categories'),
     getAll('words'),
-    getAll('people'),
     getSettings(),
     get('meta', 'stickers').catch(() => null),
   ]);
@@ -373,98 +372,6 @@ async function renderCategories() {
     );
   }
 
-  // Stage 1's kept-on-purpose iPhone spike harness used to save its camera /
-  // microphone sample as a word with no category. That exact legacy test row
-  // is invisible in the normal editor and v45 correctly refuses to omit it
-  // from a backup. Offer a narrowly matched, parent-confirmed cleanup; never
-  // guess about any other malformed row.
-  const staleSpikeTest = allWords.find(
-    (word) =>
-      word.id === 'spike-test-word' &&
-      word.word === 'spike-test' &&
-      !allCategories.some((category) => category.id === word.categoryId)
-  );
-  if (staleSpikeTest) {
-    const media = [
-      staleSpikeTest.photo || staleSpikeTest.photoId ? 'test photo' : null,
-      staleSpikeTest.audioWord || staleSpikeTest.audioPhrase ? 'test recording' : null,
-    ].filter(Boolean);
-    screen.appendChild(
-      card('🧹 Old setup test found', [
-        el('p', {
-          class: 'settings-note settings-note-warn',
-          text: `An early camera/microphone test called “spike-test” is blocking backups. It is not one of Antosia’s words${
-            media.length ? ` and contains a ${media.join(' and a ')}` : ''
-          }.`,
-        }),
-        el('button', {
-          class: 'btn-secondary',
-          text: 'Remove old setup test',
-          style: 'width:100%;',
-          onclick: async () => {
-            const details = media.length
-              ? ` Its ${media.join(' and ')} will also be removed.`
-              : '';
-            if (
-              !confirm(
-                `Remove the old “spike-test” setup record so backups can work?${details} This will not remove any of Antosia’s real words.`
-              )
-            ) {
-              return;
-            }
-            try {
-              await deleteWordAndCleanup(staleSpikeTest.id);
-              alert('Old setup test removed. You can save and verify a backup now.');
-              render();
-            } catch (error) {
-              alert(`Could not remove the old setup test: ${errText(error)}`);
-            }
-          },
-        }),
-      ])
-    );
-  }
-
-  // A very early iOS recording could stop without producing any bytes. The
-  // person's introduction is optional, but a zero-byte Blob cannot be backed
-  // up as valid media. Name the affected person and let the parent remove only
-  // that unusable field; their profile, photo and recordings stay untouched.
-  const peopleWithEmptyIntro = allPeople.filter(
-    (person) => person.introAudio instanceof Blob && person.introAudio.size === 0
-  );
-  for (const person of peopleWithEmptyIntro) {
-    const personName = (person.name || 'this person').trim() || 'this person';
-    screen.appendChild(
-      card('🧹 Empty intro recording found', [
-        el('p', {
-          class: 'settings-note settings-note-warn',
-          text: `${personName} has an old empty language-introduction clip that is blocking backups. Their profile, photo and word recordings are not affected.`,
-        }),
-        el('button', {
-          class: 'btn-secondary',
-          text: `Remove empty intro clip for ${personName}`,
-          style: 'width:100%;',
-          onclick: async () => {
-            if (
-              !confirm(
-                `Remove only ${personName}’s unusable empty introduction clip? Their profile, photo and word recordings will stay.`
-              )
-            ) {
-              return;
-            }
-            try {
-              await put('people', { ...person, introAudio: null, updatedAt: Date.now() });
-              alert(`The empty intro clip for ${personName} was removed. You can try saving the backup again.`);
-              render();
-            } catch (error) {
-              alert(`Could not remove the empty intro clip: ${errText(error)}`);
-            }
-          },
-        }),
-      ])
-    );
-  }
-
   // Backup and Share are deliberately different payloads. A private backup
   // includes allowlisted app metadata (phrases, stickers, settings); a family
   // share never includes meta and only carries photos referenced by words.
@@ -485,6 +392,10 @@ async function renderCategories() {
           if (method !== 'cancelled' && onSuccess) await onSuccess();
           if (method === 'download') alert(doneMessage(sizeMB));
         } catch (err) {
+          if (err && err.name === 'BackupHealthError') {
+            push({ screen: 'backupRepair' });
+            return;
+          }
           alert(`Export failed: ${err.message}`);
         } finally {
           btn.disabled = false;
@@ -1501,6 +1412,117 @@ function card(title, children) {
   return el('div', { class: 'settings-card' }, [el('h2', { class: 'settings-card-title', text: title }), ...children]);
 }
 
+async function renderBackupRepair() {
+  appEl.appendChild(topbar({ title: '🩺 Backup health check', onBack: () => pop() }));
+  const screen = el('div', { class: 'screen' });
+  let health;
+  try {
+    health = await inspectBackupHealth();
+  } catch (error) {
+    screen.appendChild(
+      card('Could not check the backup', [
+        el('p', { class: 'settings-note settings-note-warn', text: errText(error) }),
+      ])
+    );
+    appEl.appendChild(screen);
+    return;
+  }
+
+  if (health.issues.length === 0) {
+    screen.appendChild(
+      card('✅ Everything is ready', [
+        el('p', {
+          class: 'settings-note',
+          text: 'Every saved record, photo and recording passed the complete backup check.',
+        }),
+        el('button', {
+          class: 'btn-secondary',
+          text: 'Back to save backup',
+          style: 'width:100%;',
+          onclick: () => pop(),
+        }),
+      ])
+    );
+    appEl.appendChild(screen);
+    return;
+  }
+
+  screen.appendChild(
+    card(`${health.issues.length} problem${health.issues.length === 1 ? '' : 's'} found together`, [
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text: 'Nothing has been changed yet. Review the complete list below. The repair keeps every usable word, person, photo and recording, and changes only the damaged item named on each card.',
+      }),
+    ])
+  );
+
+  for (const issue of health.issues) {
+    screen.appendChild(
+      card(issue.title, [
+        el('p', { class: 'settings-line', text: issue.detail }),
+        el('p', { class: 'settings-note', text: `Repair: ${issue.impact}` }),
+      ])
+    );
+  }
+
+  const repairable = health.issues.filter((issue) => issue.repairable);
+  if (repairable.length) {
+    screen.appendChild(
+      el('button', {
+        class: 'btn-danger',
+        text: `Repair all ${repairable.length} problem${repairable.length === 1 ? '' : 's'}`,
+        style: 'width:100%;margin-top:8px;',
+        onclick: async (event) => {
+          const summary = repairable
+            .slice(0, 8)
+            .map((issue) => `• ${issue.title}: ${issue.impact}`)
+            .join('\n');
+          const remainder =
+            repairable.length > 8 ? `\n• …and ${repairable.length - 8} more shown on this screen.` : '';
+          if (
+            !confirm(
+              `Apply all the repairs shown?\n\n${summary}${remainder}\n\nThe operation is all-or-nothing: if the reviewed app data changed, nothing will be repaired.`
+            )
+          ) {
+            return;
+          }
+          const button = event.currentTarget;
+          button.disabled = true;
+          button.textContent = 'Repairing…';
+          try {
+            const result = await repairBackupHealth(health.reviewToken);
+            if (result.issues.length) {
+              alert(
+                `${result.repaired} problem${result.repaired === 1 ? '' : 's'} repaired. ${result.issues.length} still need attention; the list will refresh now.`
+              );
+              render();
+            } else {
+              alert(
+                `All ${result.repaired} backup problem${result.repaired === 1 ? '' : 's'} repaired. Tap Save backup again.`
+              );
+              pop();
+            }
+          } catch (error) {
+            alert(`Nothing was repaired: ${errText(error)}`);
+            render();
+          }
+        },
+      })
+    );
+  }
+
+  if (health.issues.some((issue) => !issue.repairable)) {
+    screen.appendChild(
+      el('p', {
+        class: 'settings-note settings-note-warn',
+        text: 'Some items cannot be repaired automatically. No backup will be presented as complete until they are resolved.',
+      })
+    );
+  }
+
+  appEl.appendChild(screen);
+}
+
 async function renderSettings() {
   appEl.appendChild(topbar({ title: 'Settings', onBack: () => pop() }));
   const screen = el('div', { class: 'screen' });
@@ -2189,7 +2211,7 @@ async function renderPersonRecordWords(view) {
   };
   async function saveRow() {
     try {
-      await put('recordings', {
+      await saveRecording({
         id: rowId,
         personId,
         type: 'word',
@@ -3131,7 +3153,7 @@ async function renderPersonRecordPhrases({ personId }) {
       setBlob: async (b) => {
         draft[spec.name] = b;
         try {
-          await put('recordings', {
+          await saveRecording({
             id: carrierRecordingId(personId, lang, spec.name),
             personId,
             type: 'carrier',
@@ -3330,6 +3352,7 @@ async function render() {
   if (view.screen === 'categoryEdit') return renderCategoryEdit(view);
   if (view.screen === 'words') return renderWords(view);
   if (view.screen === 'wordEdit') return renderWordEdit(view);
+  if (view.screen === 'backupRepair') return renderBackupRepair();
   if (view.screen === 'settings') return renderSettings();
   if (view.screen === 'people') return renderPeople();
   if (view.screen === 'personEdit') return renderPersonEdit(view);
@@ -3368,7 +3391,7 @@ function errText(err) {
   // blank slate for a possible later first-open of the real app).
   const recordGistId = new URLSearchParams(location.search).get('record');
   if (recordGistId) {
-    const { startRecordingPage } = await import('./record.js?v=48');
+    const { startRecordingPage } = await import('./record.js?v=49');
     startRecordingPage(recordGistId);
     return;
   }

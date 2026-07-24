@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // makes the analyser take media.js's documented no-AudioContext fallback.
 globalThis.window = {};
 
-const { analyzeImportPayload } = await import('../js/backup.js?v=48');
+const { analyzeImportPayload } = await import('../js/backup.js?v=49');
 
 const emptySnapshot = () => ({
   categories: [],

@@ -25,6 +25,71 @@ export async function downscaleImage(file, maxDimension = 1024, quality = 0.85) 
   });
 }
 
+function imageElementDecodes(blob) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    const finish = (ok) => {
+      URL.revokeObjectURL(url);
+      resolve(ok);
+    };
+    img.onload = () => finish(img.naturalWidth > 0 && img.naturalHeight > 0);
+    img.onerror = () => finish(false);
+    img.src = url;
+  });
+}
+
+// `createImageBitmap` is the preferred check, but some iOS image formats can
+// display through <img> even when that API rejects them. A backup repair must
+// never delete a picture merely because one decoder path is unavailable.
+export async function canDecodeImage(blob) {
+  if (!(blob instanceof Blob) || blob.size === 0 || !blob.type.startsWith('image/')) return false;
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const ok = bitmap.width > 0 && bitmap.height > 0;
+      if (bitmap.close) bitmap.close();
+      if (ok) return true;
+    } catch {
+      // Fall through to the browser's ordinary image element decoder.
+    }
+  }
+  return imageElementDecodes(blob);
+}
+
+// Returns a stable reason code instead of throwing so the backup health scan
+// can collect every problem in one pass. Callers that save new media use
+// assertUsableMedia() below.
+export async function mediaProblem(blob, kind) {
+  if (!(blob instanceof Blob)) return 'not-media';
+  if (blob.size === 0) return 'empty';
+  if (kind === 'image') {
+    if (!blob.type.startsWith('image/')) return 'wrong-type';
+    return (await canDecodeImage(blob)) ? null : 'undecodable-image';
+  }
+  if (kind === 'audio') {
+    if (!/^(audio|video)\//.test(blob.type || '')) return 'wrong-type';
+    return (await canDecodeAudio(blob)) ? null : 'unplayable-audio';
+  }
+  return 'wrong-type';
+}
+
+export async function assertUsableMedia(blob, kind, label = kind === 'image' ? 'Picture' : 'Recording') {
+  const problem = await mediaProblem(blob, kind);
+  if (!problem) return blob;
+  const reason =
+    problem === 'empty'
+      ? 'is empty'
+      : problem === 'not-media'
+        ? 'is not stored as media'
+        : problem === 'wrong-type'
+          ? `is not stored as ${kind}`
+          : problem === 'undecodable-image'
+            ? 'cannot be opened as an image'
+            : 'cannot be played on this device';
+  throw new Error(`${label} ${reason}.`);
+}
+
 // --- Audio recording -----------------------------------------------------
 
 const AUDIO_MIME_CANDIDATES = [
@@ -112,10 +177,17 @@ export async function recordAudio({ maxMs = 6000 } = {}) {
   });
 
   const result = new Promise((resolve, reject) => {
-    recorder.addEventListener('stop', () => {
+    recorder.addEventListener('stop', async () => {
       const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
-      if (blob.size === 0) {
-        reject(new Error('No audio was captured. Please try recording again.'));
+      const problem = await mediaProblem(blob, 'audio');
+      if (problem) {
+        reject(
+          new Error(
+            problem === 'empty'
+              ? 'No audio was captured. Please try recording again.'
+              : 'That recording cannot be played on this device. Please try recording again.'
+          )
+        );
         return;
       }
       resolve({ blob, mimeType: blob.type, durationMs: Date.now() - startedAt });

@@ -1,6 +1,6 @@
 # Plan: "Antosia's app" — parent-led Dutch word-play prototype
 
-## Status (as of 24 July 2026) — live app `?v=48`
+## Status (as of 24 July 2026) — release candidate `?v=49`
 
 **Everything shipped is code-complete, deployed, and locally verified (headless
 Chromium, zero console errors). Nothing is half-built.**
@@ -45,9 +45,26 @@ end to end and a backup built successfully afterward; the full browser suite
 passes 41 assertions with zero warnings or errors, including direct refusal of
 a simulated zero-byte microphone result.
 
-**⏭️ NEXT:** force-quit and reopen the phone app, remove the named empty intro
-clip, then repeat Save backup → Save to Files → Verify backup. Everything else
-in the plan is specified but NOT signed off.
+**v49 RELEASE CANDIDATE (24 July):** the next phone attempt showed that solving
+old records one at a time was the wrong abstraction: after the empty intro came
+an undecodable profile photo, and further damaged media could still be hidden
+behind it. v49 replaces the individual cleanup cards with one complete Backup
+Health Check. It scans every persisted media path and reference before changing
+anything, names all problems on one screen, and applies the reviewed repairs in
+one guarded IndexedDB transaction—if any record changes in the meantime, the
+whole repair rolls back. It preserves every healthy parent record and clears or
+removes only the unusable field/reference named in the report. iOS-valid images
+now get both `createImageBitmap` and ordinary `<img>` decoding before being
+classified as damaged. Normal word/person/photo/recording/phrase saves and family
+recording imports reject unusable new media at ingress. The browser suite passes
+63 assertions with zero console warnings/errors, including 15 simultaneous
+legacy problems repaired in one pass, strict post-repair backup, transaction
+rollback, nested Photo Inbox media, and every normal future save path.
+
+**⏭️ NEXT:** deploy v49, then on the phone force-quit and reopen, tap Save backup,
+review the complete Backup Health Check, tap Repair all once, and repeat Save
+backup → Save to Files → Verify backup. Everything else in the plan is specified
+but NOT signed off.
 
 **⏸️ STILL PAUSED — `TWIN_LINK_PLAN.md` (now v3.1, and NO LONGER build-ready).**
 Three defects in its already-shipped v42 code were found and fixed in v44, which
@@ -58,6 +75,7 @@ Shipped newest first:
 
 | v | What |
 |---|---|
+| v49 | **Comprehensive backup health check and atomic repair.** One scan reports all legacy media/reference problems together; one confirmed, race-guarded transaction repairs only the named unusable pieces. Valid iPhone images get a second decoder fallback, and all normal media save/import paths now refuse corrupt or empty inputs before persistence. |
 | v48 | **Zero-byte intro recording repair.** Names any person with an old empty optional introduction clip and offers a confirmed field-only cleanup; keeps their profile/photo/word recordings. New zero-byte microphone results are refused before they can be saved. |
 | v47 | **Leaked extra-photo cache repair.** Prevents `attachPhotos()`'s display-only `extraPhotos` Blob copies from being persisted by `saveWord`, and excludes already-leaked copies from backup/share/digests while retaining the canonical `photos` records referenced by `extraPhotoIds`. |
 | v46 | **Legacy spike-test repair.** Detects only the exact invalid `spike-test-word` left by the Stage 1 iPhone harness and offers a parent-confirmed removal so backup validation can pass. Future spike persistence uses non-exported test metadata rather than an invalid word row. |

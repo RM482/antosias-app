@@ -1,3 +1,5 @@
+import { assertUsableMedia } from './media.js?v=49';
+
 const DB_NAME = 'antosia-app';
 const DB_VERSION = 3;
 const RECORD_STORES = new Set(['meta', 'categories', 'words', 'photos', 'people', 'recordings']);
@@ -178,7 +180,7 @@ export async function remove(storeName, id) {
 export async function putAllTransactional(
   writes,
   context = 'restoring data',
-  { skipIfPresent = {}, expectedRevs = {}, deleteExpectedRevs = {} } = {}
+  { skipIfPresent = {}, expectedRevs = {}, deleteExpectedRevs = {}, abortOnMismatch = false } = {}
 ) {
   const db = await openDB();
   const storeNames = [...new Set([...Object.keys(writes), ...Object.keys(deleteExpectedRevs)])];
@@ -205,7 +207,14 @@ export async function putAllTransactional(
             const liveExists = live !== undefined;
             const expectedExists = expectedRev !== undefined;
             if (liveExists !== expectedExists || (expectedExists && liveRev !== expectedRev)) {
-              skipped.push({ store: storeName, id: key, reason: 'changed' });
+              if (abortOnMismatch) {
+                preflightError = new Error(
+                  'The app data changed while the repair was being reviewed. Nothing was repaired; please review it again.'
+                );
+                t.abort();
+              } else {
+                skipped.push({ store: storeName, id: key, reason: 'changed' });
+              }
             } else {
               write();
             }
@@ -240,7 +249,11 @@ export async function putAllTransactional(
         const live = req.result;
         const liveRev = live && Object.prototype.hasOwnProperty.call(live, 'rev') ? live.rev : null;
         if (!live || liveRev !== item.rev) {
-          preflightError = new Error('The untouched starter data changed while the restore was being reviewed. Nothing was restored.');
+          preflightError = new Error(
+            abortOnMismatch
+              ? 'The app data changed while the repair was being reviewed. Nothing was repaired; please review it again.'
+              : 'The untouched starter data changed while the restore was being reviewed. Nothing was restored.'
+          );
           t.abort();
           return;
         }
@@ -317,6 +330,10 @@ export async function deleteWordAndCleanup(wordId) {
 // someone as the default clears the flag on whoever held it before, inside
 // the same transaction so an interruption can't leave two defaults behind.
 export async function savePerson(person) {
+  if (person.photo != null) await assertUsableMedia(person.photo, 'image', 'Profile photo');
+  if (person.introAudio != null) {
+    await assertUsableMedia(person.introAudio, 'audio', 'Language introduction');
+  }
   const db = await openDB();
   const t = db.transaction('people', 'readwrite');
   const store = t.objectStore('people');
@@ -362,6 +379,7 @@ export async function deletePersonAndCleanup(personId) {
 // --- Photo storage (shared across languages) ---
 
 export async function savePhoto(blob) {
+  await assertUsableMedia(blob, 'image', 'Photo');
   const id = newId();
   await put('photos', { id, blob });
   return id;
@@ -378,6 +396,13 @@ export async function getPhoto(photoId) {
 // photo record, so every word sharing that photoId sees the new picture.
 // Backward compatible: old words with inline photo still load, migrate on save.
 export async function saveWord(wordDraft) {
+  if (wordDraft.photo != null) await assertUsableMedia(wordDraft.photo, 'image', 'Word photo');
+  if (wordDraft.audioWord != null) {
+    await assertUsableMedia(wordDraft.audioWord, 'audio', 'Word recording');
+  }
+  if (wordDraft.audioPhrase != null) {
+    await assertUsableMedia(wordDraft.audioPhrase, 'audio', 'Optional phrase recording');
+  }
   if (wordDraft.photo) {
     if (wordDraft.photoId) {
       await put('photos', { id: wordDraft.photoId, blob: wordDraft.photo });
@@ -454,6 +479,19 @@ export function wordRecordingId(personId, wordId) {
 
 export function carrierRecordingId(personId, language, name) {
   return `${personId}:carrier:${language}:${name}`;
+}
+
+export async function saveRecording(recording) {
+  if (recording.audioWord != null) {
+    await assertUsableMedia(recording.audioWord, 'audio', 'Family word recording');
+  }
+  if (recording.audioPhrase != null) {
+    await assertUsableMedia(recording.audioPhrase, 'audio', 'Family phrase recording');
+  }
+  if (recording.blob != null) {
+    await assertUsableMedia(recording.blob, 'audio', 'Family game phrase');
+  }
+  return put('recordings', recording);
 }
 
 // All voices that can carry a session for this category+language, computed
@@ -625,6 +663,7 @@ export async function getStandardPhrases(language = 'nl') {
 export async function saveStandardPhrase(language, name, blob) {
   const key = (PHRASE_SCHEMA[language] || {})[name];
   if (!key) throw new Error(`Unknown standard phrase: ${language}/${name}`);
+  await assertUsableMedia(blob, 'audio', 'Game phrase');
   await put('meta', { key, value: blob });
 }
 

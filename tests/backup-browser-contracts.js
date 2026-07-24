@@ -1,13 +1,28 @@
-import { deleteWordAndCleanup, ensureSeeded, get, getAll, put, remove, saveWord } from '../js/db.js?v=48';
 import {
+  ensureSeeded,
+  get,
+  getAll,
+  put,
+  putAllTransactional,
+  remove,
+  savePerson,
+  savePhoto,
+  saveRecording,
+  saveStandardPhrase,
+  saveWord,
+} from '../js/db.js?v=49';
+import {
+  analyzeRecordingResponse,
   analyzeImportPayload,
   applyImportPayload,
   buildBackupPayload,
   buildSharePayload,
   getBackupVerificationStatus,
+  inspectBackupHealth,
+  repairBackupHealth,
   verifyBackupPayload,
-} from '../js/backup.js?v=48';
-import { recordAudio } from '../js/media.js?v=48';
+} from '../js/backup.js?v=49';
+import { recordAudio } from '../js/media.js?v=49';
 
 const result = document.getElementById('result');
 const payloadOutput = document.getElementById('backup-payload');
@@ -17,6 +32,24 @@ let assertions = 0;
 function assert(condition, message) {
   assertions += 1;
   if (!condition) throw new Error(message);
+}
+
+async function caughtError(action) {
+  try {
+    await action();
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+function dataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function wavBlob() {
@@ -111,7 +144,89 @@ async function run() {
     'zero-byte microphone result is refused before save'
   );
 
+  const futureBadImage = new Blob([9, 8, 7], { type: 'image/jpeg' });
+  const futureEmptyAudio = new Blob([], { type: 'audio/mp4' });
+  assert(
+    /cannot be opened/.test((await caughtError(() => savePhoto(futureBadImage)))?.message || ''),
+    'new undecodable photos are refused before entering the database'
+  );
+  assert(
+    /cannot be opened/.test(
+      (
+        await caughtError(() =>
+          savePerson({
+            id: 'future-bad-person',
+            name: 'Future bad person',
+            language: 'nl',
+            photo: futureBadImage,
+          })
+        )
+      )?.message || ''
+    ),
+    'new undecodable profile photos are refused before save'
+  );
+  assert(
+    /is empty/.test(
+      (
+        await caughtError(() =>
+          saveWord({
+            id: 'future-bad-word',
+            categoryId: 'unused',
+            word: 'future bad word',
+            audioWord: futureEmptyAudio,
+          })
+        )
+      )?.message || ''
+    ),
+    'new empty word recordings are refused before save'
+  );
+  assert(
+    /is empty/.test(
+      (
+        await caughtError(() =>
+          saveRecording({
+            id: 'future-bad-recording',
+            personId: 'unused',
+            audioWord: futureEmptyAudio,
+          })
+        )
+      )?.message || ''
+    ),
+    'new empty family recordings are refused before save'
+  );
+  assert(
+    /is empty/.test(
+      (await caughtError(() => saveStandardPhrase('nl', 'goed', futureEmptyAudio)))?.message || ''
+    ),
+    'new empty game phrases are refused before save'
+  );
+  const badFamilyResponse = await analyzeRecordingResponse({
+    formatVersion: 'recording-response-1',
+    personName: 'Future family member',
+    language: 'nl',
+    personPhoto: await dataUrl(futureBadImage),
+    introAudio: await dataUrl(futureEmptyAudio),
+    words: [],
+    carriers: [],
+  });
+  assert(
+    badFamilyResponse.personPhoto === null &&
+      badFamilyResponse.introAudio === null &&
+      badFamilyResponse.unplayable.includes('the profile photo') &&
+      badFamilyResponse.unplayable.includes('the intro clip'),
+    'family recording import reports and excludes every unusable profile-media field'
+  );
+
+  // Reproduce several generations of legacy damage at the same time. The
+  // health check must report the whole set before changing anything, then one
+  // atomic repair must make a strict backup possible without deleting healthy
+  // parent records.
   await clearDatabase();
+  await put('categories', { id: 'health-cat', name: 'Health test', language: 'nl' });
+  await put('photos', {
+    id: 'health-bad-photo',
+    blob: new Blob([1, 2, 3], { type: 'image/jpeg' }),
+  });
   await put('words', {
     id: 'spike-test-word',
     categoryId: null,
@@ -119,36 +234,166 @@ async function run() {
     article: '',
     word: 'spike-test',
   });
-  let spikeRefused = false;
-  try {
-    await buildBackupPayload();
-  } catch (error) {
-    spikeRefused = /missing an id, text, or category/.test(error.message);
-  }
-  assert(spikeRefused, 'legacy spike test blocks an incomplete backup');
-  await deleteWordAndCleanup('spike-test-word');
-  assert(!(await get('words', 'spike-test-word')), 'legacy spike test cleanup is exact');
-
+  await put('words', {
+    id: 'health-word',
+    categoryId: 'health-cat',
+    language: 'nl',
+    word: 'kapot',
+    photoId: 'health-bad-photo',
+    extraPhotoIds: [123],
+    audioWord: new Blob([], { type: 'audio/mp4' }),
+    audioPhrase: new Blob([], { type: 'audio/mp4' }),
+  });
   await put('people', {
-    id: 'person-empty-intro',
+    id: 'health-person',
     name: 'Oma Test',
     language: 'nl',
+    photo: new Blob([4, 5, 6], { type: 'image/jpeg' }),
     introAudio: new Blob([], { type: 'audio/mp4' }),
   });
-  let emptyIntroRefused = false;
+  await put('recordings', {
+    id: 'health-person:word:health-word',
+    personId: 'health-person',
+    wordId: 'health-word',
+    type: 'word',
+    audioWord: new Blob([], { type: 'audio/mp4' }),
+  });
+  await put('recordings', {
+    id: 'health-person:carrier:nl:goed',
+    personId: 'health-person',
+    type: 'carrier',
+    language: 'nl',
+    name: 'goed',
+    blob: new Blob([], { type: 'audio/mp4' }),
+  });
+  await put('meta', {
+    key: 'phrase-goed-zo',
+    value: new Blob([], { type: 'audio/mp4' }),
+  });
+  await put('meta', {
+    key: 'phrase-clickon-de',
+    value: [{ id: 'broken-variant', label: 'Broken', blob: new Blob([], { type: 'audio/mp4' }) }],
+  });
+  await put('meta', { key: 'stickers', value: { damaged: true } });
+  await put('meta', { key: 'twinAudit', value: 'damaged' });
+  await put('meta', {
+    key: 'photoIntake:item:health-item',
+    value: {
+      id: 'health-item',
+      photoId: 'health-bad-photo',
+      status: 'deferred',
+      draft: { audio: { nl: new Blob([], { type: 'audio/mp4' }) } },
+    },
+  });
+  await put('meta', {
+    key: 'photoIntake',
+    value: { itemIds: ['health-item', 'missing-item'], language: 'nl' },
+  });
+
+  const healthBefore = await inspectBackupHealth();
+  const healthIds = new Set(healthBefore.issues.map((issue) => issue.id));
+  assert(healthBefore.issues.length >= 11, 'one health scan reports every simultaneous legacy problem');
+  assert(healthIds.has('words:spike-test-word:legacy-test'), 'health scan includes the exact old setup test');
+  assert(
+    [...healthIds].some((id) => id.startsWith('photos:health-bad-photo:blob:')),
+    'health scan includes the shared photo record'
+  );
+  assert(
+    [...healthIds].some((id) => id.startsWith('people:health-person:photo:')),
+    'health scan includes the profile photo'
+  );
+  assert(
+    [...healthIds].some((id) => id.startsWith('people:health-person:introAudio:')),
+    'health scan includes the person intro'
+  );
+  assert(
+    [...healthIds].some((id) => id.startsWith('recordings:health-person:word:health-word:audioWord:')),
+    'health scan includes family word audio'
+  );
+  assert(healthIds.has('meta:stickers:shape'), 'health scan includes damaged private metadata');
+
+  let aggregateRefused = false;
   try {
     await buildBackupPayload();
   } catch (error) {
-    emptyIntroRefused = /introAudio is empty or is not stored as media/.test(error.message);
+    aggregateRefused =
+      error.name === 'BackupHealthError' &&
+      error.issues.length === healthBefore.issues.length;
   }
-  assert(emptyIntroRefused, 'zero-byte person intro blocks an incomplete backup');
-  const emptyIntroPerson = await get('people', 'person-empty-intro');
-  await put('people', { ...emptyIntroPerson, introAudio: null });
-  const repairedIntroPerson = await get('people', 'person-empty-intro');
-  assert(repairedIntroPerson.name === 'Oma Test', 'empty-intro repair keeps the person');
-  assert(repairedIntroPerson.introAudio === null, 'empty-intro repair clears only the unusable clip');
-  await remove('people', 'person-empty-intro');
+  assert(aggregateRefused, 'strict export sends the complete issue list to the health screen');
 
+  await put('categories', {
+    ...(await get('categories', 'health-cat')),
+    name: 'Changed after the report opened',
+  });
+  const staleReviewError = await caughtError(() =>
+    repairBackupHealth(healthBefore.reviewToken)
+  );
+  assert(
+    /Nothing was repaired/.test(staleReviewError?.message || '') &&
+      (await get('words', 'spike-test-word')),
+    'a stale on-screen health report cannot repair any data'
+  );
+  const refreshedHealth = await inspectBackupHealth();
+  const healthRepair = await repairBackupHealth(refreshedHealth.reviewToken);
+  assert(healthRepair.issues.length === 0, 'one repair pass resolves every reported problem');
+  assert(!(await get('words', 'spike-test-word')), 'repair removes only the exact setup-test word');
+  const repairedWord = await get('words', 'health-word');
+  const repairedPerson = await get('people', 'health-person');
+  assert(repairedWord.word === 'kapot', 'repair keeps the affected word');
+  assert(
+    repairedWord.photoId === null &&
+      repairedWord.extraPhotoIds.length === 0 &&
+      repairedWord.audioWord === null &&
+      repairedWord.audioPhrase === null,
+    'repair clears only the word’s unusable media'
+  );
+  assert(repairedPerson.name === 'Oma Test', 'repair keeps the affected person');
+  assert(
+    repairedPerson.photo === null && repairedPerson.introAudio === null,
+    'repair clears only the person’s unusable photo and intro'
+  );
+  assert(!(await get('photos', 'health-bad-photo')), 'repair removes the unusable shared photo');
+  assert(
+    !(await get('meta', 'photoIntake:item:health-item')),
+    'repair removes an Inbox item whose only photo is unusable'
+  );
+  assert(
+    (await get('meta', 'photoIntake')).value.itemIds.length === 0,
+    'repair normalises the Inbox header after removing damaged items'
+  );
+
+  const categoryBeforeRace = await get('categories', 'health-cat');
+  const wordBeforeRace = await get('words', 'health-word');
+  await put('categories', { ...categoryBeforeRace, name: 'Changed while reviewing' });
+  let repairRaceRefused = false;
+  try {
+    await putAllTransactional(
+      {
+        categories: [{ ...categoryBeforeRace, name: 'Should not win' }],
+        words: [{ ...wordBeforeRace, word: 'Should not be written' }],
+      },
+      'testing repair race',
+      {
+        expectedRevs: {
+          categories: new Map([['health-cat', categoryBeforeRace.rev]]),
+          words: new Map([['health-word', wordBeforeRace.rev]]),
+        },
+        abortOnMismatch: true,
+      }
+    );
+  } catch (error) {
+    repairRaceRefused = /Nothing was repaired/.test(error.message);
+  }
+  assert(repairRaceRefused, 'repair aborts when reviewed data changes before commit');
+  assert(
+    (await get('words', 'health-word')).word === 'kapot',
+    'a repair race rolls back every other queued change'
+  );
+  await buildBackupPayload();
+  assert(true, 'strict backup succeeds immediately after the single repair');
+
+  await clearDatabase();
   const audio = wavBlob();
   const image = pngBlob();
 

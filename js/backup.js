@@ -9,8 +9,8 @@ import {
   wordLabel,
   wordRecordingId,
   carrierRecordingId,
-} from './db.js?v=48';
-import { canDecodeAudio } from './media.js?v=48';
+} from './db.js?v=49';
+import { mediaProblem } from './media.js?v=49';
 
 const CONTENT_STORES = ['categories', 'words', 'photos', 'people', 'recordings'];
 const SNAPSHOT_STORES = [...CONTENT_STORES, 'meta'];
@@ -84,31 +84,24 @@ async function sha256(value) {
 }
 
 async function assertDecodableBlob(blob, path) {
-  if (!(blob instanceof Blob) || blob.size === 0) {
-    throw new Error(`${path} is empty or is not stored as media.`);
-  }
-  if (!/^(image|audio|video)\//.test(blob.type || '')) {
-    throw new Error(`${path} has no recognised image/audio type.`);
-  }
   const imageField =
     path.startsWith('photos[') ||
     /\.photo(?:$|\.)/.test(path) ||
     /\.personPhoto(?:$|\.)/.test(path);
-  if (imageField && !blob.type.startsWith('image/')) {
+  const problem = await mediaProblem(blob, imageField ? 'image' : 'audio');
+  if (problem === 'not-media' || problem === 'empty') {
+    throw new Error(`${path} is empty or is not stored as media.`);
+  }
+  if (problem === 'wrong-type' && imageField) {
     throw new Error(`${path} is not stored as an image.`);
   }
-  if (!imageField && blob.type.startsWith('image/')) {
+  if (problem === 'wrong-type') {
     throw new Error(`${path} is not stored as audio.`);
   }
-  if (blob.type.startsWith('image/')) {
-    try {
-      const bitmap = await createImageBitmap(blob);
-      if (!bitmap.width || !bitmap.height) throw new Error('empty image');
-      if (bitmap.close) bitmap.close();
-    } catch {
-      throw new Error(`${path} is not a decodable image.`);
-    }
-  } else if (!(await canDecodeAudio(blob))) {
+  if (problem === 'undecodable-image') {
+    throw new Error(`${path} is not a decodable image.`);
+  }
+  if (problem === 'unplayable-audio') {
     throw new Error(`${path} is not playable audio.`);
   }
 }
@@ -151,6 +144,699 @@ function sortedRows(store, rows) {
       return clean;
     })
     .sort((a, b) => lexicalCompare(keyFor(store, a), keyFor(store, b)));
+}
+
+function logicalBackupSnapshot(snapshot) {
+  const logical = {};
+  for (const store of CONTENT_STORES) logical[store] = sortedRows(store, snapshot[store] || []);
+  logical.meta = sortedRows('meta', filteredMeta(snapshot.meta || []));
+  return logical;
+}
+
+const healthReason = {
+  'not-media': 'is not stored as media',
+  empty: 'is empty',
+  'wrong-type': 'has the wrong media type',
+  'undecodable-image': 'cannot be opened as an image',
+  'unplayable-audio': 'cannot be played on this device',
+};
+
+function healthIssue({ id, title, detail, impact, repair }) {
+  return {
+    id,
+    title,
+    detail,
+    impact,
+    repairable: !!repair,
+    repair,
+  };
+}
+
+async function inspectBackupSnapshot(snapshot) {
+  const issues = [];
+  const categories = new Map((snapshot.categories || []).map((row) => [row.id, row]));
+  const words = new Map((snapshot.words || []).map((row) => [row.id, row]));
+  const photos = new Map((snapshot.photos || []).map((row) => [row.id, row]));
+  const people = new Map((snapshot.people || []).map((row) => [row.id, row]));
+  const meta = new Map(filteredMeta(snapshot.meta || []).map((row) => [row.key, row]));
+
+  const add = (issue) => issues.push(healthIssue(issue));
+  const checkMedia = async ({
+    store,
+    key,
+    field,
+    value,
+    kind,
+    title,
+    impact,
+    repair,
+    required = false,
+  }) => {
+    if (value == null && !required) return;
+    const problem = await mediaProblem(value, kind);
+    if (!problem) return;
+    add({
+      id: `${store}:${key}:${field}:${problem}`,
+      title,
+      detail: healthReason[problem] || 'is unusable',
+      impact,
+      repair,
+    });
+  };
+
+  for (const category of snapshot.categories || []) {
+    if (typeof category.name !== 'string' || !category.name.trim()) {
+      add({
+        id: `categories:${category.id}:name`,
+        title: 'A category has no name',
+        detail: `Saved category ${category.id || '(unknown)'}`,
+        impact: 'It will be kept as “Recovered category” so its words remain together.',
+        repair: { type: 'set-field', store: 'categories', key: category.id, field: 'name', value: 'Recovered category' },
+      });
+    }
+  }
+
+  for (const word of snapshot.words || []) {
+    const label = (word.word || word.id || 'Recovered word').trim?.() || 'Recovered word';
+    if (
+      word.id === 'spike-test-word' &&
+      word.word === 'spike-test' &&
+      !categories.has(word.categoryId)
+    ) {
+      add({
+        id: 'words:spike-test-word:legacy-test',
+        title: 'Old setup test',
+        detail: 'The early camera/microphone test is not one of Antosia’s words.',
+        impact: 'Only that exact setup-test record and its test-only media will be removed.',
+        repair: { type: 'remove-spike', wordId: word.id },
+      });
+      continue;
+    }
+    if (typeof word.word !== 'string' || !word.word.trim()) {
+      add({
+        id: `words:${word.id}:word`,
+        title: 'A saved word has no text',
+        detail: `Word record ${word.id}`,
+        impact: 'Its photos and recordings will be kept under the temporary name “Recovered word”.',
+        repair: { type: 'set-field', store: 'words', key: word.id, field: 'word', value: 'Recovered word' },
+      });
+    }
+    if (typeof word.categoryId !== 'string' || !categories.has(word.categoryId)) {
+      add({
+        id: `words:${word.id}:category`,
+        title: `“${label}” has no usable category`,
+        detail: 'The word itself and all of its media still exist.',
+        impact: 'It will be moved to a new “Recovered words” category in the same language.',
+        repair: { type: 'recover-word-category', wordId: word.id, language: word.language === 'pl' ? 'pl' : 'nl' },
+      });
+    }
+    if (word.extraPhotoIds != null && !Array.isArray(word.extraPhotoIds)) {
+      add({
+        id: `words:${word.id}:extraPhotoIds`,
+        title: `“${label}” has a damaged extra-photo list`,
+        detail: 'The list is not stored in the expected format.',
+        impact: 'The damaged list will be cleared; the word and its primary photo remain.',
+        repair: { type: 'set-field', store: 'words', key: word.id, field: 'extraPhotoIds', value: [] },
+      });
+    }
+    if (
+      word.photoId != null &&
+      (typeof word.photoId !== 'string' || !word.photoId.trim())
+    ) {
+      add({
+        id: `words:${word.id}:photoId-shape`,
+        title: `“${label}” has a damaged primary-photo link`,
+        detail: 'The link is not stored in the expected format.',
+        impact: 'Only the broken link will be cleared; the word and all recordings remain.',
+        repair: { type: 'set-field', store: 'words', key: word.id, field: 'photoId', value: null },
+      });
+    }
+    if (Array.isArray(word.extraPhotoIds)) {
+      const invalidIds = word.extraPhotoIds.filter(
+        (photoId) => typeof photoId !== 'string' || !photoId.trim()
+      );
+      if (invalidIds.length) {
+        add({
+          id: `words:${word.id}:extraPhotoIds-items`,
+          title: `“${label}” has ${invalidIds.length} damaged extra-photo link${invalidIds.length === 1 ? '' : 's'}`,
+          detail: 'The affected link values are not stored in the expected format.',
+          impact: 'Only the broken links will be cleared; usable photos, the word and all recordings remain.',
+          repair: { type: 'normalize-extra-photo-ids', wordId: word.id },
+        });
+      }
+    }
+    const referencedIds = [
+      typeof word.photoId === 'string' ? word.photoId : null,
+      ...(Array.isArray(word.extraPhotoIds)
+        ? word.extraPhotoIds.filter((photoId) => typeof photoId === 'string')
+        : []),
+    ].filter(Boolean);
+    for (const photoId of referencedIds) {
+      if (!photos.has(photoId)) {
+        add({
+          id: `words:${word.id}:missing-photo:${photoId}`,
+          title: `“${label}” refers to a missing photo`,
+          detail: `Missing photo ${photoId}`,
+          impact: 'Only the broken reference will be cleared; the word and all recordings remain.',
+          repair: { type: 'clear-photo-reference', wordId: word.id, photoId },
+        });
+      }
+    }
+    await checkMedia({
+      store: 'words',
+      key: word.id,
+      field: 'photo',
+      value: word.photo,
+      kind: 'image',
+      title: `Legacy photo for “${label}”`,
+      impact: 'Only the unusable inline photo will be cleared; the word and recordings remain.',
+      repair: { type: 'clear-field', store: 'words', key: word.id, field: 'photo' },
+    });
+    await checkMedia({
+      store: 'words',
+      key: word.id,
+      field: 'audioWord',
+      value: word.audioWord,
+      kind: 'audio',
+      title: `Word recording for “${label}”`,
+      impact: 'Only this unusable recording will be cleared; the word will need recording again before sessions.',
+      repair: { type: 'clear-field', store: 'words', key: word.id, field: 'audioWord' },
+    });
+    await checkMedia({
+      store: 'words',
+      key: word.id,
+      field: 'audioPhrase',
+      value: word.audioPhrase,
+      kind: 'audio',
+      title: `Optional phrase for “${label}”`,
+      impact: 'Only the unusable optional phrase will be cleared.',
+      repair: { type: 'clear-field', store: 'words', key: word.id, field: 'audioPhrase' },
+    });
+  }
+
+  for (const photo of snapshot.photos || []) {
+    const usedBy = (snapshot.words || [])
+      .filter(
+        (word) =>
+          word.photoId === photo.id ||
+          (Array.isArray(word.extraPhotoIds) && word.extraPhotoIds.includes(photo.id))
+      )
+      .map((word) => word.word || word.id);
+    await checkMedia({
+      store: 'photos',
+      key: photo.id,
+      field: 'blob',
+      value: photo.blob,
+      kind: 'image',
+      title: usedBy.length
+        ? `Photo used by ${usedBy.map((name) => `“${name}”`).join(', ')}`
+        : 'An unassigned saved photo',
+      impact: usedBy.length
+        ? 'The unusable photo will be removed and only its broken references cleared; words and recordings remain.'
+        : 'The unusable unassigned photo will be removed.',
+      repair: { type: 'remove-photo', photoId: photo.id },
+      required: true,
+    });
+  }
+
+  for (const person of snapshot.people || []) {
+    const name = (person.name || person.id || 'Recovered person').trim?.() || 'Recovered person';
+    if (typeof person.name !== 'string' || !person.name.trim()) {
+      add({
+        id: `people:${person.id}:name`,
+        title: 'A person has no name',
+        detail: `Person record ${person.id}`,
+        impact: 'Their profile and recordings will be kept under the temporary name “Recovered person”.',
+        repair: { type: 'set-field', store: 'people', key: person.id, field: 'name', value: 'Recovered person' },
+      });
+    }
+    await checkMedia({
+      store: 'people',
+      key: person.id,
+      field: 'photo',
+      value: person.photo,
+      kind: 'image',
+      title: `${name}’s profile photo`,
+      impact: 'Only the unusable photo will be cleared; their profile, intro and every word recording remain.',
+      repair: { type: 'clear-field', store: 'people', key: person.id, field: 'photo' },
+    });
+    await checkMedia({
+      store: 'people',
+      key: person.id,
+      field: 'introAudio',
+      value: person.introAudio,
+      kind: 'audio',
+      title: `${name}’s language introduction`,
+      impact: 'Only the unusable intro clip will be cleared; their profile, photo and word recordings remain.',
+      repair: { type: 'clear-field', store: 'people', key: person.id, field: 'introAudio' },
+    });
+  }
+
+  for (const recording of snapshot.recordings || []) {
+    const person = people.get(recording.personId);
+    const word = words.get(recording.wordId);
+    const personName = (person && person.name) || recording.personId || 'unknown person';
+    const wordName = (word && word.word) || recording.wordId || recording.name || 'recording';
+    if (typeof recording.personId !== 'string' || !person) {
+      add({
+        id: `recordings:${recording.id}:person`,
+        title: `Orphaned recording for ${wordName}`,
+        detail: 'The person this recording belonged to is missing.',
+        impact: 'Only this unusable orphaned recording row will be removed.',
+        repair: { type: 'delete-row', store: 'recordings', key: recording.id },
+      });
+      continue;
+    }
+    if (recording.wordId && !word) {
+      add({
+        id: `recordings:${recording.id}:word`,
+        title: `Orphaned word recording by ${personName}`,
+        detail: 'The word this recording belonged to is missing.',
+        impact: 'Only this unusable orphaned recording row will be removed.',
+        repair: { type: 'delete-row', store: 'recordings', key: recording.id },
+      });
+      continue;
+    }
+    await checkMedia({
+      store: 'recordings',
+      key: recording.id,
+      field: 'audioWord',
+      value: recording.audioWord,
+      kind: 'audio',
+      title: `${personName} saying “${wordName}”`,
+      impact: 'Only this unusable family word clip will be cleared.',
+      repair: { type: 'clear-field', store: 'recordings', key: recording.id, field: 'audioWord' },
+    });
+    await checkMedia({
+      store: 'recordings',
+      key: recording.id,
+      field: 'audioPhrase',
+      value: recording.audioPhrase,
+      kind: 'audio',
+      title: `${personName}’s optional phrase for “${wordName}”`,
+      impact: 'Only this unusable optional phrase will be cleared.',
+      repair: { type: 'clear-field', store: 'recordings', key: recording.id, field: 'audioPhrase' },
+    });
+    await checkMedia({
+      store: 'recordings',
+      key: recording.id,
+      field: 'blob',
+      value: recording.blob,
+      kind: 'audio',
+      title: `${personName}’s game phrase “${recording.name || recording.id}”`,
+      impact: 'Only this unusable game phrase will be cleared.',
+      repair: { type: 'clear-field', store: 'recordings', key: recording.id, field: 'blob' },
+    });
+  }
+
+  for (const row of meta.values()) {
+    if (row.key === 'stickers' && !Array.isArray(row.value)) {
+      add({
+        id: 'meta:stickers:shape',
+        title: 'The sticker collection is damaged',
+        detail: 'The collection is not stored as a list.',
+        impact: 'The damaged collection will be reset; words, photos and recordings are not affected.',
+        repair: { type: 'set-field', store: 'meta', key: row.key, field: 'value', value: [] },
+      });
+    }
+    if (row.key === 'twinAudit' && (!row.value || typeof row.value !== 'object')) {
+      add({
+        id: 'meta:twinAudit:shape',
+        title: 'The translation-linking review is damaged',
+        detail: 'Its saved review state is not readable.',
+        impact: 'Only the review state will be reset; no words or translations will be changed.',
+        repair: {
+          type: 'set-field',
+          store: 'meta',
+          key: row.key,
+          field: 'value',
+          value: { ready: false },
+        },
+      });
+    }
+    if (row.key.startsWith('phrase-')) {
+      if (row.value instanceof Blob) {
+        await checkMedia({
+          store: 'meta',
+          key: row.key,
+          field: 'value',
+          value: row.value,
+          kind: 'audio',
+          title: `Saved game phrase “${row.key.slice(7)}”`,
+          impact: 'Only this unusable game phrase will be removed.',
+          repair: { type: 'delete-row', store: 'meta', key: row.key },
+        });
+      } else if (Array.isArray(row.value)) {
+        for (let index = 0; index < row.value.length; index += 1) {
+          const variant = row.value[index];
+          if (!variant || typeof variant.id !== 'string') {
+            add({
+              id: `meta:${row.key}:variant:${index}:shape`,
+              title: `A “${row.key.slice(7)}” phrase variant is damaged`,
+              detail: 'The variant has no usable identity.',
+              impact: 'Only this damaged variant will be removed; other variants remain.',
+              repair: { type: 'remove-phrase-variant', key: row.key, index },
+            });
+            continue;
+          }
+          await checkMedia({
+            store: 'meta',
+            key: row.key,
+            field: `variant:${index}`,
+            value: variant.blob,
+            kind: 'audio',
+            title: `Game phrase variant “${variant.label || variant.id}”`,
+            impact: 'Only this unusable variant will be removed; other variants remain.',
+            repair: { type: 'remove-phrase-variant', key: row.key, index },
+            required: true,
+          });
+        }
+      } else {
+        add({
+          id: `meta:${row.key}:shape`,
+          title: `Saved game phrase “${row.key.slice(7)}” is damaged`,
+          detail: 'It is not stored as a recording or a phrase-variant list.',
+          impact: 'Only this unusable game phrase entry will be removed.',
+          repair: { type: 'delete-row', store: 'meta', key: row.key },
+        });
+      }
+    }
+
+    if (row.key.startsWith('photoIntake:item:')) {
+      const value = row.value;
+      if (!value || typeof value !== 'object' || !value.photoId || !photos.has(value.photoId)) {
+        add({
+          id: `meta:${row.key}:photo`,
+          title: 'A Photo Inbox item has no usable photo',
+          detail: `Inbox item ${(value && value.id) || row.key}`,
+          impact: 'The unusable Inbox item will be removed; committed words are not touched.',
+          repair: { type: 'delete-intake-item', key: row.key },
+        });
+        continue;
+      }
+      const audio = value.draft && value.draft.audio;
+      if (audio && typeof audio === 'object') {
+        for (const [language, blob] of Object.entries(audio)) {
+          await checkMedia({
+            store: 'meta',
+            key: row.key,
+            field: `draft.audio.${language}`,
+            value: blob,
+            kind: 'audio',
+            title: `Photo Inbox ${language.toUpperCase()} draft recording`,
+            impact: 'Only this unusable draft recording will be cleared; the Inbox photo and text remain.',
+            repair: { type: 'remove-intake-audio', key: row.key, language },
+          });
+        }
+      }
+    }
+
+    if (
+      INTAKE_META_RE.test(row.key) &&
+      row.key !== 'photoIntake' &&
+      !row.key.startsWith('photoIntake:item:') &&
+      (!row.value || typeof row.value !== 'object')
+    ) {
+      add({
+        id: `meta:${row.key}:shape`,
+        title: 'A legacy Photo Inbox record is damaged',
+        detail: `Inbox record ${row.key}`,
+        impact: 'Only this unreadable Inbox metadata will be removed; committed words are not touched.',
+        repair: { type: 'delete-row', store: 'meta', key: row.key },
+      });
+    }
+  }
+
+  const intakeHeader = meta.get('photoIntake');
+  if (intakeHeader && (!intakeHeader.value || typeof intakeHeader.value !== 'object')) {
+    add({
+      id: 'meta:photoIntake:shape',
+      title: 'The Photo Inbox header is damaged',
+      detail: 'The list of open Inbox items is not readable.',
+      impact: 'Only the unreadable header will be removed; photos and standalone deferred items remain.',
+      repair: { type: 'delete-row', store: 'meta', key: 'photoIntake' },
+    });
+  } else if (intakeHeader) {
+    const itemIds = Array.isArray(intakeHeader.value.itemIds)
+      ? intakeHeader.value.itemIds
+      : [];
+    const invalid = itemIds.filter((id) => typeof id !== 'string' || !id);
+    const missing = itemIds.filter(
+      (id) => typeof id === 'string' && !meta.has(`photoIntake:item:${id}`)
+    );
+    if (!Array.isArray(intakeHeader.value.itemIds) || invalid.length || missing.length) {
+      const brokenCount = Math.max(1, invalid.length + missing.length);
+      add({
+        id: 'meta:photoIntake:itemIds',
+        title: 'The Photo Inbox list contains damaged or missing items',
+        detail: `${brokenCount} broken item reference${brokenCount === 1 ? '' : 's'}`,
+        impact: 'Only the broken list entries will be removed.',
+        repair: { type: 'normalize-intake-header' },
+      });
+    }
+  }
+
+  return { issues };
+}
+
+export class BackupHealthError extends Error {
+  constructor(issues) {
+    super(
+      `${issues.length} backup problem${issues.length === 1 ? '' : 's'} found. Review all of them before saving.`
+    );
+    this.name = 'BackupHealthError';
+    this.issues = issues;
+  }
+}
+
+function backupHealthReviewToken(snapshot) {
+  return JSON.stringify(
+    SNAPSHOT_STORES.map((store) => [
+      store,
+      [...(snapshot[store] || [])]
+        .map((row) => [
+          keyFor(store, row),
+          own(row, 'rev') ? row.rev : null,
+        ])
+        .sort((a, b) => lexicalCompare(a[0], b[0])),
+    ])
+  );
+}
+
+export async function inspectBackupHealth() {
+  const snapshot = await readSnapshot(SNAPSHOT_STORES);
+  const health = await inspectBackupSnapshot(snapshot);
+  return { ...health, reviewToken: backupHealthReviewToken(snapshot) };
+}
+
+function cloneForRepair(value) {
+  if (value instanceof Blob) return value;
+  if (Array.isArray(value)) return value.map(cloneForRepair);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneForRepair(item)]));
+  }
+  return value;
+}
+
+export async function repairBackupHealth(reviewToken) {
+  const snapshot = await readSnapshot(SNAPSHOT_STORES);
+  if (
+    typeof reviewToken !== 'string' ||
+    reviewToken !== backupHealthReviewToken(snapshot)
+  ) {
+    throw new Error(
+      'The app data changed while the repair was being reviewed. Nothing was repaired; please review it again.'
+    );
+  }
+  const { issues } = await inspectBackupSnapshot(snapshot);
+  const rawMaps = Object.fromEntries(
+    SNAPSHOT_STORES.map((store) => [
+      store,
+      new Map((snapshot[store] || []).map((row) => [keyFor(store, row), row])),
+    ])
+  );
+  const changed = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, new Map()]));
+  const deleted = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, new Set()]));
+  const phraseVariantRemovals = new Map();
+  const deletedIntakeIds = new Set();
+
+  const mutable = (store, key) => {
+    if (deleted[store].has(key)) return null;
+    if (!changed[store].has(key)) {
+      const raw = rawMaps[store].get(key);
+      if (!raw) return null;
+      changed[store].set(key, cloneForRepair(raw));
+    }
+    return changed[store].get(key);
+  };
+  const removeRow = (store, key) => {
+    if (!rawMaps[store].has(key)) return;
+    changed[store].delete(key);
+    deleted[store].add(key);
+  };
+
+  for (const issue of issues) {
+    const repair = issue.repair;
+    if (!repair) continue;
+    if (repair.type === 'clear-field') {
+      const row = mutable(repair.store, repair.key);
+      if (row) row[repair.field] = null;
+    } else if (repair.type === 'set-field') {
+      const row = mutable(repair.store, repair.key);
+      if (row) row[repair.field] = cloneForRepair(repair.value);
+    } else if (repair.type === 'delete-row') {
+      removeRow(repair.store, repair.key);
+    } else if (repair.type === 'clear-photo-reference') {
+      const word = mutable('words', repair.wordId);
+      if (word) {
+        if (word.photoId === repair.photoId) word.photoId = null;
+        if (Array.isArray(word.extraPhotoIds)) {
+          word.extraPhotoIds = word.extraPhotoIds.filter((id) => id !== repair.photoId);
+        }
+      }
+    } else if (repair.type === 'normalize-extra-photo-ids') {
+      const word = mutable('words', repair.wordId);
+      if (word && Array.isArray(word.extraPhotoIds)) {
+        word.extraPhotoIds = word.extraPhotoIds.filter(
+          (id) => typeof id === 'string' && id.trim()
+        );
+      }
+    } else if (repair.type === 'remove-photo') {
+      removeRow('photos', repair.photoId);
+      for (const word of snapshot.words || []) {
+        if (
+          word.photoId === repair.photoId ||
+          (Array.isArray(word.extraPhotoIds) && word.extraPhotoIds.includes(repair.photoId))
+        ) {
+          const draft = mutable('words', word.id);
+          if (draft) {
+            if (draft.photoId === repair.photoId) draft.photoId = null;
+            if (Array.isArray(draft.extraPhotoIds)) {
+              draft.extraPhotoIds = draft.extraPhotoIds.filter((id) => id !== repair.photoId);
+            }
+          }
+        }
+      }
+      for (const row of filteredMeta(snapshot.meta || [])) {
+        if (row.key.startsWith('photoIntake:item:') && row.value && row.value.photoId === repair.photoId) {
+          removeRow('meta', row.key);
+          deletedIntakeIds.add(row.key.slice('photoIntake:item:'.length));
+        }
+      }
+    } else if (repair.type === 'remove-phrase-variant') {
+      if (!phraseVariantRemovals.has(repair.key)) phraseVariantRemovals.set(repair.key, new Set());
+      phraseVariantRemovals.get(repair.key).add(repair.index);
+    } else if (repair.type === 'remove-intake-audio') {
+      const row = mutable('meta', repair.key);
+      const audio = row && row.value && row.value.draft && row.value.draft.audio;
+      if (audio && typeof audio === 'object') delete audio[repair.language];
+    } else if (repair.type === 'delete-intake-item') {
+      removeRow('meta', repair.key);
+      deletedIntakeIds.add(repair.key.slice('photoIntake:item:'.length));
+    } else if (repair.type === 'recover-word-category') {
+      const categoryId = `recovered:${repair.language}:backup-health`;
+      if (!rawMaps.categories.has(categoryId) && !changed.categories.has(categoryId)) {
+        changed.categories.set(categoryId, {
+          id: categoryId,
+          name: 'Recovered words',
+          emoji: '🧰',
+          order: 999,
+          language: repair.language,
+          createdAt: Date.now(),
+        });
+      }
+      const word = mutable('words', repair.wordId);
+      if (word) word.categoryId = categoryId;
+    } else if (repair.type === 'remove-spike') {
+      const spike = rawMaps.words.get(repair.wordId);
+      removeRow('words', repair.wordId);
+      for (const recording of snapshot.recordings || []) {
+        if (recording.wordId === repair.wordId) removeRow('recordings', recording.id);
+      }
+      const spikePhotoIds = [
+        spike && spike.photoId,
+        ...(spike && Array.isArray(spike.extraPhotoIds) ? spike.extraPhotoIds : []),
+      ].filter(Boolean);
+      for (const photoId of spikePhotoIds) {
+        const usedElsewhere = (snapshot.words || []).some(
+          (word) =>
+            word.id !== repair.wordId &&
+            (word.photoId === photoId ||
+              (Array.isArray(word.extraPhotoIds) && word.extraPhotoIds.includes(photoId)))
+        );
+        if (!usedElsewhere) removeRow('photos', photoId);
+      }
+    }
+  }
+
+  for (const [key, indexes] of phraseVariantRemovals) {
+    const row = mutable('meta', key);
+    if (!row || !Array.isArray(row.value)) continue;
+    row.value = row.value.filter((_variant, index) => !indexes.has(index));
+    if (row.value.length === 0) removeRow('meta', key);
+  }
+
+  const header = rawMaps.meta.get('photoIntake');
+  const headerNeedsNormalizing =
+    deletedIntakeIds.size > 0 ||
+    issues.some((issue) => issue.repair && issue.repair.type === 'normalize-intake-header');
+  if (header && headerNeedsNormalizing) {
+    const row = mutable('meta', 'photoIntake');
+    if (row && row.value && typeof row.value === 'object') {
+      const listedIds = Array.isArray(row.value.itemIds)
+        ? row.value.itemIds
+        : [...rawMaps.meta.keys()]
+            .filter((key) => key.startsWith('photoIntake:item:'))
+            .map((key) => key.slice('photoIntake:item:'.length));
+      row.value.itemIds = [
+        ...new Set(
+          listedIds.filter(
+            (id) =>
+              typeof id === 'string' &&
+              id &&
+              !deletedIntakeIds.has(id) &&
+              rawMaps.meta.has(`photoIntake:item:${id}`) &&
+              !deleted.meta.has(`photoIntake:item:${id}`)
+          )
+        ),
+      ];
+    }
+  }
+
+  const writes = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, []]));
+  const expectedRevs = Object.fromEntries(SNAPSHOT_STORES.map((store) => [store, new Map()]));
+  const deleteExpectedRevs = {};
+  for (const store of SNAPSHOT_STORES) {
+    for (const [key, row] of changed[store]) {
+      if (deleted[store].has(key)) continue;
+      const raw = rawMaps[store].get(key);
+      expectedRevs[store].set(
+        key,
+        raw ? (own(raw, 'rev') ? raw.rev : null) : undefined
+      );
+      writes[store].push(withoutRev(row));
+    }
+    if (deleted[store].size) {
+      deleteExpectedRevs[store] = new Map(
+        [...deleted[store]].map((key) => {
+          const raw = rawMaps[store].get(key);
+          return [key, raw && own(raw, 'rev') ? raw.rev : null];
+        })
+      );
+    }
+  }
+
+  if (!issues.length) return { repaired: 0, issues: [] };
+  await putAllTransactional(writes, 'repairing backup data', {
+    expectedRevs,
+    deleteExpectedRevs,
+    abortOnMismatch: true,
+  });
+  const after = await inspectBackupHealth();
+  return {
+    repaired: issues.filter((issue) => issue.repairable).length,
+    issues: after.issues,
+  };
 }
 
 async function encodeRecursive(value, path, manifest) {
@@ -218,9 +904,9 @@ async function datasetDigest(payload) {
 
 async function encodeBackupSnapshot(snapshot) {
   const manifest = [];
-  const logical = {};
-  for (const store of CONTENT_STORES) logical[store] = sortedRows(store, snapshot[store] || []);
-  logical.meta = sortedRows('meta', filteredMeta(snapshot.meta || []));
+  const health = await inspectBackupSnapshot(snapshot);
+  if (health.issues.length) throw new BackupHealthError(health.issues);
+  const logical = logicalBackupSnapshot(snapshot);
   assertLogicalDataset(logical);
   const payload = {
     formatVersion: 4,
@@ -303,6 +989,8 @@ export async function buildSharePayload() {
     recordings: sortedRows('recordings', snapshot.recordings || []),
     meta: [],
   };
+  const health = await inspectBackupSnapshot(source);
+  if (health.issues.length) throw new BackupHealthError(health.issues);
   assertLogicalDataset(source);
   const payload = { formatVersion: 3, payloadKind: 'share', exportedAt: Date.now() };
   for (const store of CONTENT_STORES) {
@@ -1067,14 +1755,17 @@ export async function analyzeRecordingResponse(payload) {
       continue;
     }
     const audioWord = await dataUrlToBlob(item.audioWord);
-    if (!(await canDecodeAudio(audioWord))) {
+    if (await mediaProblem(audioWord, 'audio')) {
       unplayable.push(wordLabel(word) || word.word);
       continue;
     }
     let audioPhrase = null;
     if (typeof item.audioPhrase === 'string') {
       audioPhrase = await dataUrlToBlob(item.audioPhrase);
-      if (!(await canDecodeAudio(audioPhrase))) audioPhrase = null; // keep the word, drop the phrase
+      if (await mediaProblem(audioPhrase, 'audio')) {
+        unplayable.push(`${wordLabel(word) || word.word} (optional phrase)`);
+        audioPhrase = null; // keep the usable word recording
+      }
     }
     wordRows.push({ wordId: item.wordId, audioWord, audioPhrase });
   }
@@ -1083,7 +1774,7 @@ export async function analyzeRecordingResponse(payload) {
   for (const item of payload.carriers || []) {
     if (!item || typeof item.name !== 'string' || typeof item.blob !== 'string') continue;
     const blob = await dataUrlToBlob(item.blob);
-    if (!(await canDecodeAudio(blob))) {
+    if (await mediaProblem(blob, 'audio')) {
       unplayable.push(`game phrase "${item.name}"`);
       continue;
     }
@@ -1091,11 +1782,17 @@ export async function analyzeRecordingResponse(payload) {
   }
 
   let personPhoto = null;
-  if (typeof payload.personPhoto === 'string') personPhoto = await dataUrlToBlob(payload.personPhoto);
+  if (typeof payload.personPhoto === 'string') {
+    personPhoto = await dataUrlToBlob(payload.personPhoto);
+    if (await mediaProblem(personPhoto, 'image')) {
+      unplayable.push('the profile photo');
+      personPhoto = null;
+    }
+  }
   let introAudio = null;
   if (typeof payload.introAudio === 'string') {
     introAudio = await dataUrlToBlob(payload.introAudio);
-    if (!(await canDecodeAudio(introAudio))) {
+    if (await mediaProblem(introAudio, 'audio')) {
       unplayable.push('the intro clip');
       introAudio = null;
     }
